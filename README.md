@@ -160,32 +160,6 @@ pixi run format            # Format code
 pixi run lint              # Run linter
 ```
 
-## Architecture
-
-**Memory Consolidation**: Count-based thresholds (not time-based)
-- Active → Working: After 10 interactions
-- Working → Episodic: After 5 working memories
-- Episodic → Semantic: After 10 episodes
-
-### Core Components
-1. **MCP Server** - Handles protocol communication
-2. **Memory** - Manages persistent storage with SQLite
-3. **Pattern Detector** - Identifies recurring workflows
-4. **Feedback Processor** - Processes user corrections
-5. **Memory Consolidator** - Archives old data automatically
-
-### Storage
-- **SQLite Database**: Structured data (interactions, patterns, preferences)
-- **Archive Tables**: Historical data for compliance/debugging
-- **Hybrid Store** (optional): Adds vector search when LLM embeddings available
-
-## Performance
-
-- **Response Time**: <100ms for most operations
-- **Pattern Matching**: Fuzzy matching with configurable thresholds
-- **Memory Management**: Automatic archival of old interactions
-- **Tested Scale**: 10,000+ interactions
-
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details
