@@ -1,0 +1,121 @@
+[project]
+name = "bicamrl"
+version = "0.1.0"
+description = "Persistent memory and learning system for AI assistants via MCP"
+authors = ["AI Memory Project <contact@example.com>"]
+channels = ["conda-forge", "pytorch"]
+platforms = ["osx-arm64", "linux-64", "osx-64"]
+
+[tasks]
+# Setup and installation
+install = "pip install -e ."
+install-dev = "pip install -e '.[dev]'"
+install-all = { depends-on = ["install", "install-dev"] }
+
+# Testing
+test = "pytest tests/ -v"
+test-cov = "pytest tests/ --cov=bicamrl --cov-report=html --cov-report=term"
+test-watch = "pytest-watch tests/ -- -v"
+test-specific = "pytest -v -k"
+test-integration = "pytest tests/test_mcp_integration.py tests/test_mcp_protocol.py -v"
+test-mcp = "pytest tests/test_mcp_*.py -v"
+
+# Code quality
+format = "black bicamrl tests"
+format-check = "black --check bicamrl tests"
+lint = "ruff check bicamrl tests"
+lint-fix = "ruff check --fix bicamrl tests"
+typecheck = "mypy bicamrl"
+typecheck-strict = "mypy --strict bicamrl"
+
+# Combined quality checks
+check = { depends-on = ["format", "lint", "typecheck", "test"] }
+check-ci = { depends-on = ["format-check", "lint", "typecheck", "test-cov"] }
+
+# Server and CLI
+server = "python -m bicamrl"
+server-dev = "python -m bicamrl --dev-mode"
+init = "python -m bicamrl.cli init"
+
+# Memory management shortcuts
+feedback = "python -m bicamrl.cli feedback"
+memory = "python -m bicamrl.cli memory"
+export = "python -m bicamrl.cli export"
+import = "python -m bicamrl.cli import"
+
+# Development helpers
+clean = "rm -rf .pytest_cache .coverage htmlcov .mypy_cache build dist *.egg-info"
+clean-all = "rm -rf .pytest_cache .coverage htmlcov .mypy_cache build dist *.egg-info .pixi pixi.lock"
+pre-commit-install = "pre-commit install"
+pre-commit-run = "pre-commit run --all-files"
+
+# Documentation
+docs-serve = "mkdocs serve"
+docs-build = "mkdocs build"
+
+# Demo and examples
+demo = "PYTHONPATH=. python examples/mcp_client_demo.py"
+demo-integration = "python -m bicamrl --test && python examples/mcp_client_demo.py"
+
+# Production testing
+test-production = "python scripts/run_production_test.py"
+test-production-quick = "python scripts/run_production_test.py --quick"
+test-monitor = "python scripts/monitor_production_test.py"
+
+# LM Studio testing - requires model name as argument
+# Usage: pixi run test-lmstudio TheBloke/Mistral-7B-Instruct-v0.2-GGUF
+test-lmstudio = "python scripts/run_lmstudio_test.py"
+test-lmstudio-full = "python scripts/run_lmstudio_test.py --full"
+test-sleep-layer = "python scripts/test_sleep_layer.py"
+
+# Utility tasks
+show-tree = "find . -type f -name '*.py' -o -name '*.md' -o -name '*.toml' -o -name '*.json' | grep -v -E '__pycache__|.git|.pixi|.pytest_cache|.coverage|htmlcov|.mypy_cache|*.egg-info' | sort"
+show-stats = "find bicamrl -name '*.py' | xargs wc -l"
+task-list = "echo 'Available pixi tasks:' && grep -E '^[a-z-]+ =' pixi.toml | sed 's/ =.*//' | sort | column"
+
+# Database management
+db-init = "python -m bicamrl.cli init --force"
+db-reset = "rm -rf .bicamrl/memory && python -m bicamrl.cli init"
+db-status = "python -m bicamrl.cli status"
+
+# Quick aliases
+f = { depends-on = ["feedback"] }
+m = { depends-on = ["memory"] }
+s = { depends-on = ["server"] }
+t = { depends-on = ["test"] }
+
+[dependencies]
+python = ">=3.9,<3.13"
+pip = "*"
+aiosqlite = ">=0.19.0"
+click = ">=8.0.0"
+pydantic = ">=2.0.0"
+aiohttp = ">=3.9.0"
+numpy = ">=1.24.0"
+
+[pypi-dependencies]
+mcp = { git = "https://github.com/modelcontextprotocol/python-sdk.git" }
+
+[feature.test.dependencies]
+pytest = ">=7.0.0"
+pytest-asyncio = ">=0.21.0"
+pytest-cov = ">=4.0.0"
+pytest-mock = ">=3.10.0"
+
+[feature.dev.dependencies]
+black = ">=23.0.0"
+ruff = ">=0.1.0"
+mypy = ">=1.0.0"
+ipython = ">=8.0.0"
+pre-commit = ">=3.0.0"
+# pytest-watch = ">=4.2.0"  # Not available in conda-forge
+# tree = "*"  # Platform-specific, not available on all systems
+
+
+[environments]
+default = ["test", "dev"]
+prod = []
+ci = ["test"]
+
+# [activation]
+# scripts = ["activate.sh"]

@@ -1,0 +1,72 @@
+# Bicamrl Mind Configuration Example
+# Copy this to ~/.bicameral/Mind.toml and customize
+
+[sleep]
+enabled = false  # Set to true to enable meta-cognitive features
+batch_size = 10
+analysis_interval = 300  # seconds between deep analysis
+min_confidence = 0.7
+discovery_interval = 86400  # seconds between role discovery (24 hours)
+
+# Configure LLM providers for Sleep
+# Configure your preferred LLM provider(s)
+# You can use OpenAI, Claude (Anthropic), or both
+
+[sleep.llm_providers.openai]
+api_key = "${OPENAI_API_KEY}"  # Or set directly: "sk-..."
+model = "gpt-4o-mini"
+temperature = 0.7
+max_tokens = 1000
+
+[sleep.llm_providers.claude]
+api_key = "${ANTHROPIC_API_KEY}"  # Or set directly: "sk-ant-..."
+model = "claude-3-haiku-20240307"
+temperature = 0.7
+max_tokens = 1000
+
+[sleep.llm_providers.local]
+endpoint = "http://localhost:11434"  # Ollama endpoint
+model = "codellama:13b"
+temperature = 0.7
+max_tokens = 1000
+
+# Map Sleep roles to LLM providers
+# Available providers: "openai", "claude", "local"
+[sleep.roles]
+analyzer = "openai"      # Analyzes patterns and behaviors
+generator = "claude"     # Generates insights and recommendations
+enhancer = "openai"      # Enhances prompts
+optimizer = "claude"     # Optimizes performance
+
+[logging]
+level = "INFO"  # DEBUG, INFO, WARNING, ERROR
+file = "logs/bicameral.log"
+max_bytes = 10485760  # 10MB
+backup_count = 5
+format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+[memory]
+consolidation_interval = 3600  # seconds (1 hour)
+max_active_memories = 1000
+max_working_memories = 5000
+episodic_retention_days = 30
+semantic_threshold = 0.8  # Minimum importance for semantic memory
+
+[interaction]
+auto_complete_timeout = 300  # seconds to wait before auto-completing
+min_actions_for_pattern = 3  # minimum occurrences to form a pattern
+pattern_confidence_threshold = 0.7
+
+[performance]
+cache_enabled = true
+cache_ttl = 3600  # seconds
+max_context_size = 10000  # tokens
+parallel_operations = true
+
+[roles]
+# Role discovery and management configuration
+auto_discover = true
+discovery_interval = 86400  # 24 hours in seconds
+min_interactions_per_role = 10  # Minimum interactions to form a role
+max_active_roles = 10  # Maximum number of roles to keep active
+storage_path = "~/.bicameral/roles.json"  # Where to store discovered roles

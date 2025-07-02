@@ -1,0 +1,77 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+env/
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Bicamrl System
+.bicamrl/
+test_memory/
+bicamrl_config.json
+.claude
+
+# Testing
+scripts
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+test_results/
+coverage.xml
+debug_*/
+*_results.json
+*_test_results.json
+production_test_*
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Pixi
+.pixi/
+pixi.lock
+
+# Environment
+.env
+.env.local
+
+# Logs
+*.log
+
+# Documentation
+docs/_build/
+site/
+
+# Temporary files
+*.tmp
+*.bak
+.cache/
+
+# Research papers
+/papers/
+
+# Top-level Markdown files (except CLAUDE.md and README.md)
+/*.md
+!CLAUDE.md
+!README.md
