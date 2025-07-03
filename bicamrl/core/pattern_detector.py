@@ -1,422 +1,268 @@
-"""Pattern detection and analysis."""
+"""LLM-based pattern detection and analysis."""
 
 import json
 import logging
 import time
-from collections import Counter, defaultdict
-from datetime import datetime, timedelta
-from typing import Dict, List, Any, Tuple, Optional
+from typing import Dict, List, Any, Optional
+from datetime import datetime
 
 from ..utils.logging_config import get_logger
 from ..utils.log_utils import async_log_context, log_pattern_operation
+from .llm_service import LLMService
 
 logger = get_logger("pattern_detector")
 
+
 class PatternDetector:
-    """Detects patterns in interaction sequences."""
+    """Detects patterns in interaction sequences using LLM intelligence."""
     
-    def __init__(self, memory_manager):
+    def __init__(self, memory_manager, llm_service: LLMService):
         self.memory_manager = memory_manager
+        self.llm_service = llm_service
         self.min_frequency = 3  # Minimum occurrences to be considered a pattern
         self.confidence_threshold = 0.6
-        self.recency_weight_days = 7  # Days for exponential decay of pattern weight
         self.logger = logger
         
         logger.info(
-            "PatternDetector initialized",
+            "LLM-based PatternDetector initialized",
             extra={
                 'min_frequency': self.min_frequency,
-                'confidence_threshold': self.confidence_threshold,
-                'recency_weight_days': self.recency_weight_days
+                'confidence_threshold': self.confidence_threshold
             }
         )
         
     @log_pattern_operation("check")
     async def check_for_patterns(self) -> List[Dict[str, Any]]:
-        """Check recent interactions for new patterns."""
+        """Check recent interactions for new patterns using LLM analysis."""
         start_time = time.time()
         
         # Get recent interactions
         async with async_log_context(logger, "fetch_interactions", limit=100):
             context = await self.memory_manager.get_recent_context(limit=100)
-            interactions = await self.memory_manager.store.get_recent_interactions(100)
+            interactions = await self.memory_manager.store.get_complete_interactions(limit=100)
         
         logger.info(
-            f"Checking {len(interactions)} interactions for patterns",
+            f"Analyzing {len(interactions)} interactions for patterns",
             extra={
                 'interaction_count': len(interactions),
                 'session_id': context.get('session_id')
             }
         )
         
-        # Detect different types of patterns
-        new_patterns = []
+        if len(interactions) < self.min_frequency:
+            return []
         
-        # File access patterns
-        async with async_log_context(logger, "detect_file_patterns"):
-            file_patterns = await self._detect_file_patterns(interactions)
-            new_patterns.extend(file_patterns)
-            if file_patterns:
-                logger.info(
-                    f"Found {len(file_patterns)} file access patterns",
-                    extra={'pattern_type': 'file', 'count': len(file_patterns)}
-                )
+        # Use LLM to analyze patterns
+        patterns = await self._analyze_patterns_with_llm(interactions)
         
-        # Action sequence patterns
-        async with async_log_context(logger, "detect_sequence_patterns"):
-            sequence_patterns = await self._detect_sequence_patterns(interactions)
-            new_patterns.extend(sequence_patterns)
-            if sequence_patterns:
-                logger.info(
-                    f"Found {len(sequence_patterns)} action sequence patterns",
-                    extra={'pattern_type': 'sequence', 'count': len(sequence_patterns)}
-                )
+        # Filter by confidence threshold
+        confident_patterns = [
+            p for p in patterns 
+            if p.get('confidence', 0) >= self.confidence_threshold
+        ]
         
-        # Workflow patterns
-        async with async_log_context(logger, "detect_workflow_patterns"):
-            workflow_patterns = await self._detect_workflow_patterns(interactions)
-            new_patterns.extend(workflow_patterns)
-            if workflow_patterns:
-                logger.info(
-                    f"Found {len(workflow_patterns)} workflow patterns",
-                    extra={'pattern_type': 'workflow', 'count': len(workflow_patterns)}
-                )
-        
-        # Store new patterns
-        if new_patterns:
-            async with async_log_context(logger, "store_patterns", count=len(new_patterns)):
-                for i, pattern in enumerate(new_patterns):
-                    await self.memory_manager.store.add_pattern(pattern)
-                    logger.debug(
-                        f"Stored pattern: {pattern.get('name', 'unnamed')}",
-                        extra={
-                            'pattern_id': pattern.get('id'),
-                            'pattern_type': pattern.get('pattern_type'),
-                            'confidence': pattern.get('confidence', 0)
-                        }
-                    )
-        
-        duration_ms = (time.time() - start_time) * 1000
+        duration = time.time() - start_time
         logger.info(
-            f"Pattern detection complete",
+            f"Pattern detection completed",
             extra={
-                'duration_ms': duration_ms,
-                'total_patterns_found': len(new_patterns),
-                'file_patterns': len(file_patterns),
-                'sequence_patterns': len(sequence_patterns),
-                'workflow_patterns': len(workflow_patterns)
+                'patterns_found': len(confident_patterns),
+                'duration_seconds': duration
             }
         )
+        
+        return confident_patterns
+        
+    async def _analyze_patterns_with_llm(self, interactions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Use LLM to discover patterns in interactions."""
+        # Prepare interaction summaries
+        summaries = []
+        for i, interaction in enumerate(interactions[-50:]):  # Last 50 interactions
+            data = interaction if isinstance(interaction, dict) else json.loads(interaction)
+            summaries.append({
+                "query": data.get('user_query', '')[:100],
+                "actions": len(data.get('actions_taken', [])),
+                "success": data.get('success', False),
+                "timestamp": data.get('timestamp', '')
+            })
             
-        return new_patterns
-    
-    async def _detect_file_patterns(self, interactions: List[Dict]) -> List[Dict]:
-        """Detect patterns in file access."""
+        prompt = f"""Analyze these user interactions to discover recurring patterns, workflows, and behaviors.
+
+Recent Interactions:
+{json.dumps(summaries, indent=2)}
+
+Identify patterns such as:
+1. Recurring workflows or action sequences
+2. Common problem-solving approaches
+3. Preferred tools or methods
+4. Time-based patterns (e.g., daily routines)
+5. Error patterns and recovery strategies
+
+For each pattern, provide:
+- Pattern name and description
+- Frequency (how often it occurs)
+- Confidence (0.0-1.0)
+- Trigger conditions
+- Recommendations
+
+Return JSON array of patterns."""
+
+        response = await self.llm_service.analyze_patterns(interactions)
+        
+        if response.error:
+            logger.error(f"LLM pattern analysis failed: {response.error}")
+            return []
+            
+        # Process and validate patterns
         patterns = []
-        
-        # Group by action type
-        file_actions = defaultdict(list)
-        for interaction in interactions:
-            if interaction.get('file_path'):
-                action = interaction['action']
-                file_path = interaction['file_path']
-                file_actions[action].append(file_path)
-        
-        # Look for files frequently accessed together
-        for action, files in file_actions.items():
-            if len(files) < self.min_frequency:
-                continue
-                
-            # Find co-occurrence patterns
-            file_pairs = []
-            for i in range(len(files) - 1):
-                if files[i] != files[i + 1]:  # Different files accessed sequentially
-                    file_pairs.append((files[i], files[i + 1]))
+        for pattern_data in response.content.get('patterns', []):
+            pattern = {
+                "name": pattern_data.get('name', 'Unknown Pattern'),
+                "description": pattern_data.get('description', ''),
+                "pattern_type": pattern_data.get('type', 'workflow'),
+                "frequency": pattern_data.get('frequency', 1),
+                "confidence": pattern_data.get('confidence', 0.5),
+                "trigger_conditions": pattern_data.get('triggers', []),
+                "recommendations": pattern_data.get('recommendations', []),
+                "metadata": {
+                    "llm_discovered": True,
+                    "discovery_timestamp": datetime.now().isoformat(),
+                    "source_interaction_count": len(interactions)
+                }
+            }
             
-            if file_pairs:
-                pair_counts = Counter(file_pairs)
-                for (file1, file2), count in pair_counts.items():
-                    if count >= self.min_frequency:
-                        patterns.append({
-                            "name": f"File pair: {file1} → {file2}",
-                            "description": f"Files often accessed together during {action}",
-                            "pattern_type": "file_access",
-                            "sequence": [file1, file2],
-                            "frequency": count,
-                            "confidence": min(count / len(files), 1.0)
-                        })
-        
+            # Only include patterns that meet minimum frequency
+            if pattern['frequency'] >= self.min_frequency:
+                patterns.append(pattern)
+                
         return patterns
-    
-    async def _detect_sequence_patterns(self, interactions: List[Dict]) -> List[Dict]:
-        """Detect patterns in action sequences."""
-        patterns = []
         
-        # Sort interactions by timestamp (oldest first)
-        sorted_interactions = sorted(interactions, key=lambda x: x['timestamp'])
+    async def find_similar_patterns(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """Find patterns similar to a query using LLM understanding."""
+        # Get all stored patterns
+        all_patterns = await self.memory_manager.store.get_patterns()
         
-        # Extract action sequences with timestamps
-        actions_with_time = [(i['action'], i['timestamp']) for i in sorted_interactions if i.get('action')]
-        
-        # Look for repeated sequences of different lengths
-        for seq_len in range(2, 6):  # Sequences of 2 to 5 actions
-            sequences = defaultdict(int)
-            sequence_weights = defaultdict(float)
-            sequence_timestamps = defaultdict(list)
+        if not all_patterns:
+            return []
             
-            for i in range(len(actions_with_time) - seq_len + 1):
-                seq = tuple(action for action, _ in actions_with_time[i:i + seq_len])
-                sequences[seq] += 1
+        # Use LLM to find similar patterns
+        prompt = f"""Given this user query: "{query}"
+
+And these discovered patterns:
+{json.dumps([{"name": p['name'], "description": p.get('description', '')} for p in all_patterns[:20]], indent=2)}
+
+Which patterns are most relevant to the query? Consider:
+1. Semantic similarity
+2. Potential applicability
+3. Problem-solving relevance
+
+Return the indices of the most relevant patterns with relevance scores."""
+
+        response = await self.llm_service._execute_request(
+            self.llm_service._build_request(
+                prompt=prompt,
+                response_format='json',
+                temperature=0.3
+            )
+        )
+        
+        if response.error:
+            # Fallback to simple text matching
+            return self._fallback_similarity_search(query, all_patterns, limit)
+            
+        # Get relevant patterns based on LLM response
+        relevant_patterns = []
+        for match in response.content.get('relevant_patterns', []):
+            idx = match.get('index', -1)
+            if 0 <= idx < len(all_patterns):
+                pattern = all_patterns[idx].copy()
+                pattern['relevance_score'] = match.get('score', 0.5)
+                relevant_patterns.append(pattern)
                 
-                # Use the most recent timestamp in the sequence
-                most_recent = max(ts for _, ts in actions_with_time[i:i + seq_len])
-                weight = self._calculate_recency_weight(most_recent)
-                sequence_weights[seq] += weight
-                sequence_timestamps[seq].append(most_recent)
-            
-            # Find frequent sequences
-            for seq, count in sequences.items():
-                if count >= self.min_frequency:
-                    weighted_frequency = sequence_weights[seq]
-                    base_confidence = min(count / (len(actions_with_time) - seq_len + 1), 1.0)
-                    recency_boost = weighted_frequency / count
-                    adjusted_confidence = min(base_confidence * (0.7 + 0.3 * recency_boost), 1.0)
-                    
-                    patterns.append({
-                        "name": f"Action sequence: {' → '.join(seq)}",
-                        "description": f"Common sequence of {len(seq)} actions",
-                        "pattern_type": "action_sequence",
-                        "sequence": list(seq),
-                        "frequency": count,
-                        "weighted_frequency": weighted_frequency,
-                        "confidence": adjusted_confidence,
-                        "last_seen": max(sequence_timestamps[seq])
-                    })
+        # Sort by relevance and limit
+        relevant_patterns.sort(key=lambda p: p['relevance_score'], reverse=True)
+        return relevant_patterns[:limit]
         
-        return patterns
-    
-    async def _detect_workflow_patterns(self, interactions: List[Dict]) -> List[Dict]:
-        """Detect higher-level workflow patterns."""
-        patterns = []
-        
-        # Sort interactions by timestamp (oldest first) since they come in DESC order
-        sorted_interactions = sorted(interactions, key=lambda x: x['timestamp'])
-        
-        # Group interactions by time proximity (within 5 minutes)
-        workflows = []
-        current_workflow = []
-        last_time = None
-        
-        for interaction in sorted_interactions:
-            try:
-                timestamp = datetime.fromisoformat(interaction['timestamp'])
-                
-                if last_time and (timestamp - last_time) > timedelta(minutes=5):
-                    # New workflow
-                    if len(current_workflow) >= 3:  # Minimum workflow size
-                        workflows.append(current_workflow)
-                    current_workflow = [interaction]
-                else:
-                    current_workflow.append(interaction)
-                    
-                last_time = timestamp
-            except Exception as e:
-                logger.warning(f"Failed to parse timestamp: {e}")
-                continue
-        
-        if len(current_workflow) >= 3:
-            workflows.append(current_workflow)
-        
-        logger.debug(f"Found {len(workflows)} workflows from {len(interactions)} interactions")
-        
-        # Analyze workflows for patterns
-        workflow_signatures = []
-        for workflow in workflows:
-            # Create a signature based on action types and file types
-            signature = []
-            for interaction in workflow:
-                action = interaction['action']
-                file_path = interaction.get('file_path', '')
-                if file_path and '.' in file_path:
-                    file_ext = file_path.split('.')[-1]
-                else:
-                    file_ext = 'unknown'
-                signature.append(f"{action}:{file_ext}")
-            workflow_signatures.append(tuple(signature))
-        
-        # Find common workflow patterns with recency weighting
-        workflow_counts = Counter(workflow_signatures)
-        workflow_weights = defaultdict(float)
-        workflow_timestamps = defaultdict(list)
-        
-        # Calculate weighted frequency based on recency
-        for i, (signature, workflow) in enumerate(zip(workflow_signatures, workflows)):
-            # Use the most recent timestamp in the workflow
-            most_recent_timestamp = max(w['timestamp'] for w in workflow)
-            weight = self._calculate_recency_weight(most_recent_timestamp)
-            workflow_weights[signature] += weight
-            workflow_timestamps[signature].append(most_recent_timestamp)
-        
-        for signature, count in workflow_counts.items():
-            if count >= self.min_frequency:
-                # Create readable description
-                steps = []
-                for step in signature:
-                    action, file_type = step.split(':')
-                    if file_type != 'unknown':
-                        steps.append(f"{action} {file_type} file")
-                    else:
-                        steps.append(action)
-                
-                # Calculate confidence with recency weighting
-                weighted_frequency = workflow_weights[signature]
-                base_confidence = min(count / len(workflows), 1.0)
-                # Boost confidence for recent patterns
-                recency_boost = weighted_frequency / count  # Average weight
-                adjusted_confidence = min(base_confidence * (0.7 + 0.3 * recency_boost), 1.0)
-                
-                patterns.append({
-                    "name": f"Workflow: {steps[0]} to {steps[-1]}",
-                    "description": f"Common workflow with {len(steps)} steps",
-                    "pattern_type": "workflow",
-                    "sequence": list(signature),
-                    "steps": steps,
-                    "frequency": count,
-                    "weighted_frequency": weighted_frequency,
-                    "confidence": adjusted_confidence,
-                    "last_seen": max(workflow_timestamps[signature])
-                })
-        
-        return patterns
-    
-    async def find_matching_patterns(self, action_sequence: List[str], 
-                                   fuzzy_threshold: float = 0.7) -> List[Dict]:
-        """Find patterns matching a given action sequence."""
-        all_patterns = await self.memory_manager.get_all_patterns()
-        matches = []
-        
-        for pattern in all_patterns:
-            if pattern.get('pattern_type') == 'action_sequence':
-                pattern_seq = pattern.get('sequence', [])
-                
-                # Check for exact match
-                if action_sequence == pattern_seq:
-                    matches.append({
-                        "pattern": pattern,
-                        "match_type": "exact",
-                        "confidence": pattern.get('confidence', 0.5),
-                        "similarity": 1.0
-                    })
-                # Check for subsequence match
-                elif self._is_subsequence(action_sequence, pattern_seq):
-                    matches.append({
-                        "pattern": pattern,
-                        "match_type": "subsequence",
-                        "confidence": pattern.get('confidence', 0.5) * 0.8,
-                        "similarity": 0.8
-                    })
-                else:
-                    # Check for fuzzy match
-                    fuzzy_matches = self._find_fuzzy_matches(action_sequence, pattern_seq, fuzzy_threshold)
-                    if fuzzy_matches:
-                        best_match = max(fuzzy_matches, key=lambda x: x[1])
-                        position, similarity = best_match
-                        matches.append({
-                            "pattern": pattern,
-                            "match_type": "fuzzy",
-                            "confidence": pattern.get('confidence', 0.5) * similarity,
-                            "similarity": similarity,
-                            "position": position
-                        })
-        
-        # Sort by combined score (confidence * similarity)
-        matches.sort(key=lambda x: x['confidence'] * x.get('similarity', 1.0), reverse=True)
-        return matches
-    
-    def _is_subsequence(self, seq1: List[str], seq2: List[str]) -> bool:
-        """Check if seq2 is a subsequence of seq1."""
-        if len(seq2) > len(seq1):
-            return False
-            
-        for i in range(len(seq1) - len(seq2) + 1):
-            if seq1[i:i + len(seq2)] == seq2:
-                return True
-        return False
-    
-    def _sequence_similarity(self, seq1: List[str], seq2: List[str]) -> float:
-        """Calculate similarity between two sequences using edit distance."""
-        if not seq1 or not seq2:
-            return 0.0
-            
-        # Use Levenshtein distance for similarity
-        m, n = len(seq1), len(seq2)
-        dp = [[0] * (n + 1) for _ in range(m + 1)]
-        
-        # Initialize base cases
-        for i in range(m + 1):
-            dp[i][0] = i
-        for j in range(n + 1):
-            dp[0][j] = j
-            
-        # Fill DP table
-        for i in range(1, m + 1):
-            for j in range(1, n + 1):
-                if seq1[i-1] == seq2[j-1]:
-                    dp[i][j] = dp[i-1][j-1]
-                else:
-                    dp[i][j] = 1 + min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1])
-        
-        # Convert distance to similarity (0-1 scale)
-        max_len = max(m, n)
-        similarity = 1.0 - (dp[m][n] / max_len)
-        return similarity
-    
-    def _find_fuzzy_matches(self, target_seq: List[str], pattern_seq: List[str], 
-                           threshold: float = 0.7) -> List[Tuple[int, float]]:
-        """Find fuzzy matches of pattern_seq in target_seq."""
-        matches = []
-        pattern_len = len(pattern_seq)
-        
-        if pattern_len > len(target_seq):
-            return matches
-            
-        # Slide window over target sequence
-        for i in range(len(target_seq) - pattern_len + 1):
-            window = target_seq[i:i + pattern_len]
-            similarity = self._sequence_similarity(window, pattern_seq)
-            
-            if similarity >= threshold:
-                matches.append((i, similarity))
-                
-        return matches
-    
-    def _calculate_recency_weight(self, timestamp_str: str) -> float:
-        """Calculate weight based on how recent an interaction is."""
-        try:
-            timestamp = datetime.fromisoformat(timestamp_str)
-            now = datetime.now()
-            days_ago = (now - timestamp).days
-            
-            # Exponential decay: weight = e^(-days_ago / recency_weight_days)
-            # This gives weight 1.0 for today, ~0.61 for 7 days ago, ~0.37 for 14 days ago
-            import math
-            weight = math.exp(-days_ago / self.recency_weight_days)
-            return max(0.1, weight)  # Minimum weight of 0.1
-        except:
-            return 0.5  # Default weight if timestamp parsing fails
-    
-    async def update_pattern_confidence(self, pattern_id: str, delta: float) -> None:
-        """Update confidence score for a pattern based on feedback."""
-        patterns = await self.memory_manager.get_all_patterns()
+    def _fallback_similarity_search(self, query: str, patterns: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
+        """Simple text-based similarity search as fallback."""
+        query_lower = query.lower()
+        scored_patterns = []
         
         for pattern in patterns:
-            if pattern.get('id') == pattern_id:
-                old_confidence = pattern.get('confidence', 0.5)
-                new_confidence = max(0.0, min(1.0, old_confidence + delta))
-                pattern['confidence'] = new_confidence
+            score = 0.0
+            name_lower = pattern.get('name', '').lower()
+            desc_lower = pattern.get('description', '').lower()
+            
+            # Check for word matches
+            query_words = set(query_lower.split())
+            name_words = set(name_lower.split())
+            desc_words = set(desc_lower.split())
+            
+            word_overlap = len(query_words & (name_words | desc_words))
+            score = word_overlap / len(query_words) if query_words else 0
+            
+            if score > 0:
+                pattern_copy = pattern.copy()
+                pattern_copy['relevance_score'] = score
+                scored_patterns.append(pattern_copy)
                 
-                # Update in storage
-                await self.memory_manager.store.update_pattern_confidence(
-                    pattern_id, new_confidence
-                )
-                break
+        # Sort by score and return top matches
+        scored_patterns.sort(key=lambda p: p['relevance_score'], reverse=True)
+        return scored_patterns[:limit]
+        
+    async def update_pattern_confidence(self, pattern_id: str, feedback: str) -> None:
+        """Update pattern confidence based on user feedback using LLM interpretation."""
+        # Get the pattern
+        patterns = await self.memory_manager.store.get_patterns()
+        pattern = next((p for p in patterns if p.get('id') == pattern_id), None)
+        
+        if not pattern:
+            logger.warning(f"Pattern {pattern_id} not found")
+            return
+            
+        # Use LLM to interpret feedback and adjust confidence
+        prompt = f"""Given this pattern:
+Name: {pattern.get('name')}
+Description: {pattern.get('description', 'No description')}
+Current Confidence: {pattern.get('confidence', 0.5)}
+
+And this user feedback: "{feedback}"
+
+How should the confidence be adjusted? Consider:
+- Positive feedback should increase confidence
+- Negative feedback should decrease confidence
+- Specific critiques might suggest pattern refinement
+
+Return JSON with:
+- new_confidence (0.0-1.0)
+- reasoning
+- suggested_refinements (if any)"""
+
+        response = await self.llm_service._execute_request(
+            self.llm_service._build_request(
+                prompt=prompt,
+                response_format='json',
+                temperature=0.3
+            )
+        )
+        
+        if response.error:
+            # Simple fallback adjustment
+            if any(word in feedback.lower() for word in ['good', 'correct', 'helpful', 'yes']):
+                new_confidence = min(0.95, pattern.get('confidence', 0.5) + 0.1)
+            else:
+                new_confidence = max(0.1, pattern.get('confidence', 0.5) - 0.1)
+        else:
+            new_confidence = response.content.get('new_confidence', pattern.get('confidence', 0.5))
+            
+        # Update pattern confidence
+        await self.memory_manager.store.update_pattern_confidence(pattern_id, new_confidence)
+        
+        logger.info(
+            f"Updated pattern confidence",
+            extra={
+                'pattern_id': pattern_id,
+                'old_confidence': pattern.get('confidence', 0.5),
+                'new_confidence': new_confidence,
+                'feedback': feedback[:50]
+            }
+        )

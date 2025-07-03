@@ -2,18 +2,20 @@
 
 **IMPORTANT**: This file contains critical project guidelines. Read it before making any changes.
 
-## Recent Updates (2025-07-02)
+## System Capabilities
 
-### Major Accomplishments
-1. **Hybrid Storage System**: Transitioned to complete interaction tracking with SQLite + vector embeddings
-2. **TOML Configuration**: Migrated from JSON to Mind.toml for all configuration
-3. **LM Studio Integration**: Full support for local LLMs without API keys
-4. **LLM-Based Role Discovery**: Replaced clustering with LLM analysis of interaction patterns
-5. **Markdown Role Storage**: Roles now stored as human-readable Markdown files
-6. **Production Logging**: Comprehensive structured JSON logging with MCP-specific decorators
-7. **Count-Based Memory Consolidation**: Replaced time-based with interaction count thresholds
-8. **Complete Archival System**: Added interaction_id tracking and archive tables
-9. **Renamed Core Components**: MemoryManager → Memory for cleaner naming
+Bicamrl provides:
+- **Hybrid Storage**: SQLite + vector embeddings for interaction tracking
+- **TOML Configuration**: All settings via Mind.toml
+- **LM Studio Integration**: Full support for local LLMs
+- **LLM-Based Role Discovery**: Dynamic analysis of interaction patterns
+- **Markdown Role Storage**: Human-readable role definitions
+- **Production Logging**: Structured JSON logging with MCP decorators
+- **Count-Based Memory Consolidation**: Interaction count thresholds
+- **Archival System**: Automatic cleanup with interaction_id tracking
+- **Dynamic World Modeling**: LLM-driven discovery without hardcoded patterns
+- **World Model Persistence**: SQLite storage for discovered knowledge
+- **Optimized JSON Prompts**: Streamlined for instruction-tuned models
 
 ### Key Architectural Decisions
 
@@ -26,6 +28,8 @@
 - **Memory Consolidation**: COUNT-BASED thresholds (NOT time-based)
 - **Memory Hierarchy**: Active → Working → Episodic → Semantic
 - **Data Management**: Archive tables for cleaned up data
+- **World Modeling**: Dynamic LLM-driven discovery (NO hardcoded patterns)
+- **World Persistence**: Dedicated SQLite database for world knowledge
 
 ## Common Commands
 
@@ -102,6 +106,7 @@ Bicamrl is a MCP (Model Context Protocol) server providing persistent memory for
 2. **Pattern Detection** (`bicamrl/core/pattern_detector.py`)
    - Identifies recurring workflows and action sequences
    - Confidence scoring for pattern reliability
+   - Fully dynamic discovery without hardcoded patterns
 
 3. **Feedback Processing** (`bicamrl/core/feedback_processor.py`)
    - Handles developer corrections and preferences
@@ -116,6 +121,11 @@ Bicamrl is a MCP (Model Context Protocol) server providing persistent memory for
    - Meta-cognitive layer for continuous improvement
    - Multi-LLM coordination for different tasks
    - Prompt optimization based on learned patterns
+
+6. **World Model** (`bicamrl/core/world_model.py`)
+   - Dynamic entity and domain discovery via LLM
+   - Persistent storage of discovered world knowledge
+   - No hardcoded domains, patterns, or entity types
 
 ### MCP Implementation
 
@@ -146,16 +156,20 @@ The server uses FastMCP from the official Python SDK:
 3. **Type Safety**: Comprehensive type hints throughout
 4. **Testability**: Mock-friendly design for unit testing
 
-## Current State
+## Testing Status
 
-- MCP server fully functional with FastMCP
+All systems tested and functional:
+- MCP server with FastMCP
 - Hierarchical memory system with count-based consolidation
-- Pattern detection with fuzzy matching and confidence scoring
-- Sleep system with command roles and multi-LLM support
-- Comprehensive test suite with integration and stress tests
-- Complete documentation suite in `docs/` directory
-- Archive system for managing memory growth
-- Interaction_id tracking for consolidation lineage
+- Pattern detection with confidence scoring
+- Sleep system with multi-LLM support
+- Test suite with integration and stress tests
+- Documentation in `docs/` directory
+- Archive system for memory management
+- Interaction tracking with unique IDs
+- Dynamic world modeling via LLM
+- World model persistence in SQLite
+- LM Studio support for local testing
 
 ## Implementation Specifics
 
@@ -179,6 +193,10 @@ self.min_frequency_for_semantic = 5     # Pattern frequency for semantic
 - `archived_interactions` - Cleaned up interactions
 - `archived_patterns` - Promoted patterns
 
+**World Model Tables**:
+- `world_model_states` - Complete world model snapshots with entities, relations, goals
+- `world_model_snapshots` - Historical snapshots of world model evolution
+
 **Archive Reasons**:
 - `consolidated_to_working` - Raw interactions → working memory
 - `consolidated_to_episodic` - Working → episodic memory
@@ -193,6 +211,33 @@ pixi run test              # Must pass before ANY commit
 pixi run test-cov          # Check coverage for new code
 pixi run check             # Format and lint
 ```
+
+### LLM Testing Modes
+
+Tests can run in three modes:
+1. **Mock Mode (default)**: No external dependencies, uses mock responses
+2. **LM Studio Mode**: Uses local LLM via LM Studio
+3. **OpenAI Mode**: Uses OpenAI API (requires API key)
+
+```bash
+# Run with mock LLM (default, fastest)
+pixi run test
+
+# Run tests with LM Studio (requires model specified)
+pixi run test-lmstudio "your-model-name"
+
+# Run specific test with LM Studio
+pixi run python -m pytest tests/test_world_model.py -m lmstudio -v
+
+# Test LM Studio connection
+pixi run python -m pytest tests/test_lmstudio_connection.py -v -s
+```
+
+**Important Notes**:
+- Tests default to mock mode for reliability and speed
+- Only tests explicitly marked with `@pytest.mark.lmstudio` will use LM Studio
+- LM Studio must be running on localhost:1234 for tests to work
+- Mock responses are optimized for instruction-tuned models
 
 ## Environment Setup
 
@@ -235,6 +280,11 @@ model = "your-local-model"
 ### Sleep System
 - `bicamrl/sleep/sleep.py` - Background processing (not sleep_layer.py!)
 - `bicamrl/sleep/roles.py` - Behavioral roles
+
+### World Model
+- `bicamrl/core/world_model.py` - Dynamic world modeling with LLM inference
+- `bicamrl/core/llm_service.py` - Centralized LLM service for all AI operations
+- `bicamrl/storage/sqlite_store.py` - World model persistence (see add_world_model_state)
 
 ### Logging Infrastructure
 - `bicamrl/utils/logging_config.py` - Structured JSON logging setup
@@ -286,3 +336,6 @@ log_tool_metric(
 - **Test Failures**: Check if LLM providers are configured
 - **Database Migrations**: Handled automatically in SQLiteStore
 - **Logging Verbosity**: Use decorators instead of manual logging in tools
+- **World Model**: Never hardcode domains or patterns - let LLM discover them
+- **JSON Prompts**: Keep prompts concise for instruction-tuned models
+- **LM Studio**: Ensure it's running on localhost:1234 before testing

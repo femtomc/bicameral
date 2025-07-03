@@ -192,25 +192,65 @@ class LocalLLMProvider(BaseLLMProvider):
         return await self._retry_with_backoff(self._make_request, prompt, **kwargs)
 
 class MockLLMProvider(BaseLLMProvider):
-    """Mock LLM provider for testing."""
+    """Mock LLM provider for testing without external dependencies."""
     
     async def analyze(self, prompt: str, **kwargs) -> str:
-        """Mock analysis."""
-        return json.dumps({
-            "patterns": [
-                {
-                    "type": "workflow",
-                    "description": "Test pattern detected",
-                    "frequency": 5,
-                    "recommendation": "Consider automating this workflow",
-                    "confidence": 0.8
-                }
-            ]
-        })
+        """Mock analysis with context-aware responses."""
+        # Provide different responses based on prompt content
+        if "world model" in prompt.lower() or "analyze this interaction" in prompt.lower():
+            return json.dumps({
+                "domain": "software_development",
+                "confidence": 0.8,
+                "entities": [
+                    {"id": "file_1", "type": "source_file", "properties": {"path": "test.py"}}
+                ],
+                "relations": [
+                    {"source": "file_1", "target": "user", "type": "edits"}
+                ],
+                "goals": [
+                    {"type": "bug_fix", "description": "Fix the issue", "confidence": 0.7}
+                ]
+            })
+        elif "pattern" in prompt.lower():
+            return json.dumps({
+                "patterns": [
+                    {
+                        "type": "workflow",
+                        "description": "Test pattern detected",
+                        "frequency": 5,
+                        "recommendation": "Consider automating this workflow",
+                        "confidence": 0.8
+                    }
+                ]
+            })
+        elif "consolidate" in prompt.lower() or "work session" in prompt.lower():
+            return json.dumps({
+                "sessions": [
+                    {
+                        "interactions": [0, 1, 2],
+                        "theme": "debugging authentication",
+                        "duration_minutes": 30
+                    }
+                ],
+                "insights": "User frequently debugs authentication issues"
+            })
+        else:
+            # Default analysis response
+            return json.dumps({
+                "analysis": "Mock analysis completed",
+                "confidence": 0.75
+            })
         
     async def generate(self, prompt: str, **kwargs) -> str:
-        """Mock generation."""
-        return "Mock enhanced prompt: " + prompt[:50] + "..."
+        """Mock generation with context-aware responses."""
+        if "hello" in prompt.lower() or "test" in prompt.lower():
+            return "Hello! This is a mock response for testing."
+        elif "enhance" in prompt.lower() or "improve" in prompt.lower():
+            return "Enhanced: " + prompt[:100]
+        elif "say 'ok'" in prompt.lower():
+            return "OK"
+        else:
+            return "Mock response for: " + prompt[:50] + "..."
 
 class MultiLLMCoordinator:
     """Coordinates multiple LLM providers for different tasks."""
@@ -275,54 +315,32 @@ def create_llm_providers(config: Dict[str, Any]) -> Dict[str, BaseLLMProvider]:
     """Create LLM providers from configuration."""
     providers = {}
     
+    # Handle empty config or mock-only config
+    if not config or (len(config) == 1 and 'mock' in config):
+        providers['mock'] = MockLLMProvider()
+        return providers
+    
     # Create providers based on config
-    if 'claude' in config and config['claude'].get('api_key'):
-        providers['claude'] = ClaudeLLMProvider(
-            api_key=config['claude']['api_key'],
-            config=config['claude']
-        )
+    for name, provider_config in config.items():
+        provider_type = provider_config.get('type', name)
         
-    if 'openai' in config and config['openai'].get('api_key'):
-        providers['openai'] = OpenAILLMProvider(
-            api_key=config['openai']['api_key'],
-            config=config['openai']
-        )
+        if provider_type == 'mock' or name == 'mock':
+            providers[name] = MockLLMProvider()
+        elif provider_type == 'claude' or (name == 'claude' and provider_config.get('api_key')):
+            providers[name] = ClaudeLLMProvider(
+                api_key=provider_config['api_key'],
+                config=provider_config
+            )
+        elif provider_type in ['openai', 'lmstudio'] or 'api_key' in provider_config or 'base_url' in provider_config:
+            providers[name] = OpenAILLMProvider(
+                api_key=provider_config.get('api_key', 'not-needed'),
+                config=provider_config
+            )
+        elif provider_type == 'local' and provider_config.get('enabled'):
+            providers[name] = LocalLLMProvider(config=provider_config)
     
-    # Support LM Studio or other OpenAI-compatible APIs
-    if 'lmstudio' in config:
-        providers['lmstudio'] = OpenAILLMProvider(
-            api_key=config['lmstudio'].get('api_key', 'not-needed'),
-            config=config['lmstudio']
-        )
-        
-    if 'local' in config and config['local'].get('enabled'):
-        providers['local'] = LocalLLMProvider(config=config['local'])
-        
-    # Add mock provider for testing
-    providers['mock'] = MockLLMProvider()
+    # Always include mock provider as fallback
+    if 'mock' not in providers:
+        providers['mock'] = MockLLMProvider()
     
-    # Set up role mappings
-    role_config = config.get('roles', {})
-    role_providers = {}
-    
-    for role, provider_name in role_config.items():
-        if provider_name in providers:
-            role_providers[role] = providers[provider_name]
-            
-    # Default mappings if not specified
-    if 'analyzer' not in role_providers and 'openai' in providers:
-        role_providers['analyzer'] = providers['openai']
-    elif 'analyzer' not in role_providers and 'claude' in providers:
-        role_providers['analyzer'] = providers['claude']
-        
-    if 'generator' not in role_providers and 'claude' in providers:
-        role_providers['generator'] = providers['claude']
-    elif 'generator' not in role_providers and 'openai' in providers:
-        role_providers['generator'] = providers['openai']
-        
-    # Use mock for missing roles in development
-    for role in ['analyzer', 'generator', 'enhancer', 'optimizer']:
-        if role not in role_providers:
-            role_providers[role] = providers.get('mock')
-            
-    return role_providers
+    return providers

@@ -1,21 +1,24 @@
-"""Memory consolidation system for hierarchical memory management."""
+"""Memory consolidation using LLM-based world models."""
 
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 from collections import defaultdict
+import json
 
 from ..utils.logging_config import get_logger
+from .world_model import WorldModelInferencer, WorldState
+from .llm_service import LLMService
 
 logger = get_logger("memory_consolidator")
 
 
 class MemoryConsolidator:
-    """Manages memory consolidation from active to working to episodic to semantic."""
+    """Manages memory consolidation using dynamic LLM-based understanding."""
     
-    def __init__(self, memory, llm_provider=None):
+    def __init__(self, memory, llm_service: LLMService):
         self.memory = memory
-        self.llm_provider = llm_provider
+        self.llm_service = llm_service
         
         # Count-based thresholds for memory transitions
         self.active_to_working_threshold = 10  # Consolidate after 10 interactions
@@ -27,722 +30,412 @@ class MemoryConsolidator:
         self.similarity_threshold = 0.8  # For grouping similar memories
         self.min_interactions_per_session = 3  # Min interactions to form a work session
         
+        # World model components
+        self.world_inferencer = WorldModelInferencer(llm_service, store=memory.store if memory else None)
+        
     async def consolidate_memories(self) -> Dict[str, int]:
         """Run memory consolidation process based on interaction counts."""
         stats = {
             "active_to_working": 0,
             "working_to_episodic": 0,
             "episodic_to_semantic": 0,
-            "cleaned_up": 0
+            "world_models_updated": 0,
+            "interactions_archived": 0,
+            "patterns_promoted": 0
         }
         
-        # Get all data
-        all_interactions = await self.memory.store.get_recent_interactions(2000)
-        all_patterns = await self.memory.get_all_patterns()
+        logger.info("Starting memory consolidation cycle")
         
-        # Separate unconsolidated interactions and existing memories
-        unconsolidated_interactions = []
-        consolidated_memories = {"working": [], "episodic": [], "semantic": []}
-        
-        # Track consolidated interaction IDs to avoid reprocessing
-        consolidated_ids = set()
-        
-        # Categorize existing consolidated memories
-        for pattern in all_patterns:
-            pattern_type = pattern.get('pattern_type', '')
-            if 'consolidated_' in pattern_type:
-                memory_type = pattern_type.replace('consolidated_', '')
-                if memory_type in consolidated_memories:
-                    consolidated_memories[memory_type].append(pattern)
-                    # Track IDs of interactions that were consolidated
-                    metadata = pattern.get('metadata', {})
-                    if 'source_interactions' in metadata:
-                        consolidated_ids.update(metadata['source_interactions'])
-        
-        # Get unconsolidated interactions
-        for interaction in all_interactions:
-            # Use the actual interaction_id from the database
-            interaction_id = interaction.get('interaction_id')
-            if interaction_id and interaction_id not in consolidated_ids:
-                unconsolidated_interactions.append(interaction)
-        
-        # Also check if we already have consolidated memories that haven't been tracked
-        # This handles the case where consolidation runs multiple times
-        existing_working_count = len(consolidated_memories["working"])
-        existing_episodic_count = len(consolidated_memories["episodic"])
-        
-        # STEP 1: Active → Working Memory Consolidation
-        # Group unconsolidated interactions by session
-        sessions = defaultdict(list)
-        for interaction in unconsolidated_interactions:
-            session_id = interaction.get('session_id', 'default')
-            sessions[session_id].append(interaction)
-        
-        # Consolidate sessions with enough interactions
-        for session_id, session_interactions in sessions.items():
-            if len(session_interactions) >= self.active_to_working_threshold:
-                # Sort by timestamp
-                session_interactions.sort(key=lambda x: x.get('timestamp', ''))
-                
-                # Take chunks of interactions for consolidation
-                for i in range(0, len(session_interactions), self.active_to_working_threshold):
-                    chunk = session_interactions[i:i + self.active_to_working_threshold]
-                    if len(chunk) >= self.min_interactions_per_session:
-                        summary = await self._create_work_summary(chunk)
-                        if summary:
-                            # Track source interactions using their actual IDs
-                            source_ids = []
-                            for i in chunk:
-                                # Only use interactions that have interaction_id
-                                if 'interaction_id' in i and i['interaction_id']:
-                                    source_ids.append(i['interaction_id'])
-                            
-                            # Only store if we have tracked source IDs
-                            if source_ids:
-                                summary['source_interactions'] = source_ids
-                                await self._store_consolidated_memory(summary, "working")
-                                stats["active_to_working"] += 1
-        
-        # STEP 2: Working → Episodic Memory Consolidation
-        # Check if we have enough working memories to consolidate
-        working_memories = consolidated_memories["working"]
-        
-        # Filter out working memories that have already been consolidated to episodic
-        unconsolidated_working = []
-        for wm in working_memories:
-            if not wm.get('metadata', {}).get('consolidated_to_episodic', False):
-                unconsolidated_working.append(wm)
-        
-        logger.debug(f"Unconsolidated working memories: {len(unconsolidated_working)}, threshold: {self.working_to_episodic_threshold}")
-        
-        if len(unconsolidated_working) >= self.working_to_episodic_threshold:
-            # Group working memories by related context (files, time proximity)
-            working_groups = self._group_working_memories(unconsolidated_working)
-            logger.debug(f"Working memory groups: {len(working_groups)}, sizes: {[len(g) for g in working_groups]}")
-            
-            for group in working_groups:
-                if len(group) >= self.working_to_episodic_threshold:
-                    episode = await self._create_episode_from_working(group)
-                    if episode:
-                        await self._store_consolidated_memory(episode, "episodic")
-                        stats["working_to_episodic"] += 1
-                        
-                        # We can't directly mark them as consolidated in the pattern store,
-                        # but we track them in the episode metadata
-        
-        # STEP 3: Episodic → Semantic Knowledge Extraction
-        # Check patterns and episodic memories for semantic extraction
-        episodic_memories = consolidated_memories["episodic"]
-        
-        # Extract from high-frequency patterns
-        patterns = await self.memory.get_all_patterns()
-        semantic_extracted = await self._extract_semantic_from_patterns(patterns)
-        stats["episodic_to_semantic"] += semantic_extracted
-        
-        # Extract from episodic memories if we have enough
-        if len(episodic_memories) >= self.episodic_to_semantic_threshold:
-            semantic_extracted = await self._extract_semantic_from_episodes(episodic_memories)
-            stats["episodic_to_semantic"] += semantic_extracted
-        
-        # Clean up consolidated memories that have been promoted
-        stats["cleaned_up"] = await self._cleanup_promoted_memories()
-        
-        logger.info(f"Memory consolidation complete: {stats}")
-        return stats
-    
-    def _group_working_memories(self, working_memories: List[Dict]) -> List[List[Dict]]:
-        """Group working memories by similarity for episodic consolidation."""
-        groups = []
-        used = set()
-        
-        for i, memory in enumerate(working_memories):
-            if i in used:
-                continue
-                
-            group = [memory]
-            used.add(i)
-            
-            # Find similar memories based on files and time proximity
-            metadata1 = memory.get('metadata', {})
-            files1 = set(metadata1.get('files_touched', []))
-            
-            for j, other in enumerate(working_memories[i+1:], i+1):
-                if j in used:
-                    continue
-                    
-                metadata2 = other.get('metadata', {})
-                files2 = set(metadata2.get('files_touched', []))
-                
-                # Check file overlap
-                if files1 and files2 and len(files1.intersection(files2)) > 0:
-                    group.append(other)
-                    used.add(j)
-                elif not files1 and not files2:
-                    # Group memories without files by session
-                    if metadata1.get('session_id') == metadata2.get('session_id'):
-                        group.append(other)
-                        used.add(j)
-            
-            groups.append(group)
-        
-        return groups
-    
-    async def _create_episode_from_working(self, working_memories: List[Dict]) -> Optional[Dict]:
-        """Create an episodic memory from multiple working memories."""
-        if not working_memories:
-            return None
-            
-        # Extract key information from working memories
-        all_files = set()
-        all_actions = []
-        total_duration = 0
-        sessions = set()
-        
-        for wm in working_memories:
-            metadata = wm.get('metadata', {})
-            all_files.update(metadata.get('files_touched', []))
-            all_actions.extend(metadata.get('action_summary', {}).items())
-            total_duration += metadata.get('duration_minutes', 0)
-            sessions.add(metadata.get('session_id'))
-        
-        # Create episode summary
-        episode = {
-            "type": "episode",
-            "name": f"Episode: {len(working_memories)} work sessions",
-            "description": f"Consolidated episode from {len(working_memories)} work sessions",
-            "files_involved": list(all_files),
-            "total_duration_minutes": total_duration,
-            "num_sessions": len(sessions),
-            "num_working_memories": len(working_memories),
-            "action_distribution": dict(all_actions),
-            "source_working_memories": [wm.get('name', '') for wm in working_memories]
-        }
-        
-        # Use LLM to create episode narrative if available
-        if self.llm_provider:
-            try:
-                context = f"Episode summary from {len(working_memories)} work sessions:\\n"
-                for wm in working_memories[:5]:  # Limit to avoid token overflow
-                    metadata = wm.get('metadata', {})
-                    context += f"- {metadata.get('type', 'work')}: {metadata.get('semantic_summary', 'No summary')}\\n"
-                
-                prompt = f"""Create an episode narrative that:
-1. Describes the overall story of what was accomplished
-2. Identifies the main theme or goal across these sessions
-3. Highlights key achievements or milestones
-4. Notes any challenges or patterns
-
-{context}"""
-                
-                narrative = await self.llm_provider.complete(prompt, max_tokens=250)
-                episode['episode_narrative'] = narrative
-                episode['has_narrative'] = True
-            except Exception as e:
-                logger.warning(f"Failed to create episode narrative: {e}")
-                episode['has_narrative'] = False
-        
-        return episode
-    
-    async def _extract_semantic_from_patterns(self, patterns: List[Dict]) -> int:
-        """Extract semantic knowledge from high-frequency patterns."""
-        extracted = 0
-        
-        for pattern in patterns:
-            # Skip already consolidated patterns
-            if 'consolidated_' in pattern.get('pattern_type', ''):
-                continue
-                
-            # Check frequency threshold
-            if pattern.get('frequency', 0) >= self.min_frequency_for_semantic:
-                # Create semantic knowledge entry
-                knowledge = await self._create_semantic_from_pattern(pattern)
-                if knowledge:
-                    await self._store_consolidated_memory(knowledge, "semantic")
-                    extracted += 1
-        
-        return extracted
-    
-    async def _create_semantic_from_pattern(self, pattern: Dict) -> Optional[Dict]:
-        """Create semantic knowledge from a pattern."""
-        knowledge = {
-            "type": "semantic_pattern",
-            "name": f"Principle: {pattern['name']}",
-            "description": f"Semantic principle derived from pattern '{pattern['name']}'",
-            "frequency": pattern.get('frequency', 0),
-            "confidence": pattern.get('confidence', 0.5),
-            "pattern_type": pattern.get('pattern_type'),
-            "key_attributes": {
-                "original_pattern": pattern['name'],
-                "sequence": pattern.get('sequence', [])
-            }
-        }
-        
-        # Use LLM to extract deeper principle if available
-        if self.llm_provider:
-            try:
-                prompt = f"""Extract the general principle from this pattern:
-Pattern: {pattern['name']}
-Type: {pattern.get('pattern_type')}
-Frequency: {pattern.get('frequency')} times
-Description: {pattern.get('description')}
-
-Provide:
-1. The underlying principle or best practice
-2. When to apply this principle
-3. Why it's effective"""
-                
-                principle = await self.llm_provider.complete(prompt, max_tokens=200)
-                knowledge['semantic_principle'] = principle
-                knowledge['has_principle'] = True
-            except Exception as e:
-                logger.warning(f"Failed to extract semantic principle: {e}")
-                knowledge['has_principle'] = False
-        
-        return knowledge
-    
-    async def _extract_semantic_from_episodes(self, episodes: List[Dict]) -> int:
-        """Extract semantic knowledge from episodic memories."""
-        if not episodes or not self.llm_provider:
-            return 0
-            
-        # Analyze episodes for meta-patterns
         try:
-            episode_summary = "Episode analysis:\\n"
-            for ep in episodes[:10]:  # Limit to avoid token overflow
-                metadata = ep.get('metadata', {})
-                episode_summary += f"- {metadata.get('name', 'Episode')}: "
-                episode_summary += f"{metadata.get('episode_narrative', metadata.get('description', 'No description'))}\\n"
+            # STEP 1: Active → Working Memory Consolidation
+            # Get unconsolidated interactions
+            unconsolidated = await self._get_unconsolidated_interactions()
             
-            prompt = f"""Analyze these episodes to extract:
-1. Common themes and patterns across episodes
-2. General workflow principles
-3. Best practices that emerge
-4. Meta-level insights about the developer's approach
-
-{episode_summary}"""
+            if len(unconsolidated) >= self.active_to_working_threshold:
+                # Use LLM to identify work sessions and patterns
+                sessions = await self._identify_work_sessions_with_llm(unconsolidated)
+                
+                for session in sessions:
+                    if len(session['interactions']) >= self.min_interactions_per_session:
+                        working_memory = await self._create_working_memory_with_llm(session)
+                        if working_memory:
+                            await self.memory.store.add_pattern(working_memory)
+                            stats["active_to_working"] += 1
+                            
+                            # Mark interactions as consolidated
+                            for interaction in session['interactions']:
+                                interaction['consolidated'] = True
+                                interaction['consolidated_to'] = working_memory['id']
             
-            meta_insights = await self.llm_provider.complete(prompt, max_tokens=300)
+            # STEP 2: Working → Episodic Memory Consolidation  
+            working_memories = await self.memory.store.get_patterns(
+                pattern_type='consolidated_working'
+            )
             
-            knowledge = {
-                "type": "semantic_meta",
-                "name": "Meta-Insights from Episodes",
-                "description": "High-level patterns extracted from episodic memories",
-                "confidence": 0.8,
-                "key_attributes": {
-                    "num_episodes_analyzed": len(episodes),
-                    "insights": meta_insights
-                },
-                "has_meta_analysis": True
-            }
+            if len(working_memories) >= self.working_to_episodic_threshold:
+                # Use LLM to group related working memories
+                episodes = await self._create_episodic_memories_with_llm(working_memories)
+                
+                for episode in episodes:
+                    await self.memory.store.add_pattern(episode)
+                    stats["working_to_episodic"] += 1
             
-            await self._store_consolidated_memory(knowledge, "semantic")
-            return 1
+            # STEP 3: Episodic → Semantic Knowledge Extraction
+            episodic_memories = await self.memory.store.get_patterns(
+                pattern_type='episodic_memory'
+            )
+            
+            if len(episodic_memories) >= self.episodic_to_semantic_threshold:
+                # Use LLM to extract semantic knowledge
+                semantic_knowledge = await self._extract_semantic_knowledge_with_llm(
+                    episodic_memories
+                )
+                
+                for knowledge in semantic_knowledge:
+                    await self.memory.store.add_pattern(knowledge)
+                    stats["episodic_to_semantic"] += 1
+            
+            # STEP 4: Build/Update Dynamic World Models
+            if unconsolidated:
+                world_model = await self._consolidate_to_world_model(unconsolidated)
+                if world_model:
+                    stats["world_models_updated"] = 1
+                    
+                    # Get insights from world model
+                    insights = self.world_inferencer.get_insights()
+                    logger.info(
+                        f"World model insights",
+                        extra={
+                            "domain": insights['domain'],
+                            "entity_types": insights['discovered_entity_types'],
+                            "relation_types": insights['discovered_relation_types'],
+                            "total_entities": insights['total_entities']
+                        }
+                    )
+            
+            # STEP 5: Cleanup old memories
+            archived = await self._cleanup_promoted_memories()
+            stats["interactions_archived"] = archived
+            
+            logger.info(
+                f"Memory consolidation completed",
+                extra={"stats": stats}
+            )
             
         except Exception as e:
-            logger.warning(f"Failed to extract semantic from episodes: {e}")
-            return 0
-    
-    async def _cleanup_promoted_memories(self) -> int:
-        """Archive consolidated memories and clean up lower tiers."""
-        total_archived = 0
-        
-        # Step 1: Archive raw interactions that are in working memories
-        all_patterns = await self.memory.get_all_patterns()
-        working_memories = [p for p in all_patterns if p.get('pattern_type') == 'consolidated_working']
-        
-        # Collect all interaction IDs that have been consolidated
-        interactions_to_archive = set()
-        for wm in working_memories:
-            source_ids = wm.get('metadata', {}).get('source_interactions', [])
-            interactions_to_archive.update(source_ids)
-        
-        # Archive interactions in batches
-        if interactions_to_archive:
-            batch_size = 100
-            interaction_list = list(interactions_to_archive)
+            logger.error(
+                f"Memory consolidation failed",
+                extra={"error": str(e)},
+                exc_info=True
+            )
             
-            for i in range(0, len(interaction_list), batch_size):
-                batch = interaction_list[i:i + batch_size]
-                try:
-                    archived = await self.memory.store.archive_interactions(
-                        interaction_ids=batch,
-                        reason="consolidated_to_working"
-                    )
-                    total_archived += archived
-                    logger.info(f"Archived {archived} interactions to working memory")
-                except Exception as e:
-                    logger.error(f"Failed to archive interactions: {e}")
+        return stats
         
-        # Step 2: Archive working memories that are in episodes
-        episodic_memories = [p for p in all_patterns if p.get('pattern_type') == 'consolidated_episodic']
-        working_to_archive = []
+    async def _get_unconsolidated_interactions(self) -> List[Dict[str, Any]]:
+        """Get interactions that haven't been consolidated yet."""
+        # Get recent complete interactions
+        all_interactions = await self.memory.store.get_complete_interactions(limit=100)
         
-        # Find which working memories have been consolidated to episodes
-        for episode in episodic_memories:
-            source_wm = episode.get('metadata', {}).get('source_working_memories', [])
-            # Find the pattern IDs for these working memories
-            for wm in working_memories:
-                if wm.get('name') in source_wm or wm.get('metadata', {}).get('name') in source_wm:
-                    working_to_archive.append(wm.get('id'))
-        
-        if working_to_archive:
-            try:
-                archived = await self.memory.store.archive_patterns(
-                    pattern_ids=working_to_archive,
-                    reason="consolidated_to_episodic"
-                )
-                total_archived += archived
-                logger.info(f"Archived {archived} working memories to episodic")
-            except Exception as e:
-                logger.error(f"Failed to archive working memories: {e}")
-        
-        # Step 3: Optionally vacuum database after large cleanup
-        if total_archived > 1000:
-            try:
-                await self.memory.store.vacuum_database()
-                logger.info("Vacuumed database after large cleanup")
-            except Exception as e:
-                logger.warning(f"Failed to vacuum database: {e}")
-        
-        return total_archived
-    
-    
-    async def _extract_semantic_knowledge(self, interactions: List[Dict]) -> int:
-        """Extract semantic knowledge from patterns and repeated behaviors."""
-        # Get all patterns
-        patterns = await self.memory.get_all_patterns()
-        
-        semantic_knowledge = []
-        
-        # Extract knowledge from high-frequency patterns
-        for pattern in patterns:
-            if pattern.get('frequency', 0) >= self.min_frequency_for_semantic:
-                knowledge = {
-                    "type": "semantic_pattern",
-                    "name": pattern['name'],
-                    "description": f"Common pattern: {pattern['description']}",
-                    "frequency": pattern['frequency'],
-                    "confidence": pattern.get('confidence', 0.5),
-                    "derived_from": pattern['pattern_type'],
-                    "key_attributes": {
-                        "sequence": pattern.get('sequence', []),
-                        "context": pattern.get('context', {})
-                    }
-                }
+        # Filter out already consolidated ones
+        unconsolidated = []
+        for interaction in all_interactions:
+            data = interaction if isinstance(interaction, dict) else json.loads(interaction)
+            if not data.get('consolidated', False):
+                unconsolidated.append(data)
                 
-                # Use LLM to extract deeper meaning
-                if self.llm_provider:
-                    try:
-                        pattern_desc = f"""Pattern Analysis:
-Name: {pattern['name']}
-Type: {pattern['pattern_type']}
-Frequency: {pattern['frequency']} occurrences
-Sequence: {pattern.get('sequence', [])}
-Description: {pattern['description']}
-"""
-                        
-                        prompt = f"""Analyze this recurring pattern and extract:
-1. The general principle or best practice it represents
-2. When this pattern should be applied
-3. Why this pattern is effective
-4. Potential improvements or variations
-
-{pattern_desc}
-"""
-                        
-                        llm_response = await self.llm_provider.complete(prompt, max_tokens=200)
-                        knowledge["semantic_principle"] = llm_response
-                        knowledge["has_semantic_extraction"] = True
-                        
-                    except Exception as e:
-                        logger.warning(f"Failed to extract semantic principle: {e}")
-                        knowledge["has_semantic_extraction"] = False
-                
-                semantic_knowledge.append(knowledge)
+        return unconsolidated
         
-        # Extract knowledge from preferences
-        preferences = await self.memory.get_preferences()
-        for category, prefs in preferences.items():
-            if prefs:
-                knowledge = {
-                    "type": "semantic_preference",
-                    "name": f"Preferences: {category}",
-                    "description": f"Learned preferences for {category}",
-                    "confidence": 0.9,
-                    "key_attributes": prefs
-                }
-                
-                # Use LLM to synthesize preferences into principles
-                if self.llm_provider and len(prefs) > 2:
-                    try:
-                        pref_desc = f"Category: {category}\nPreferences:\n"
-                        for key, value in list(prefs.items())[:10]:  # Limit to avoid token overflow
-                            pref_desc += f"- {key}: {value}\n"
-                        
-                        prompt = f"""Synthesize these preferences into:
-1. Core principles for {category}
-2. The underlying philosophy or approach
-3. How these preferences work together
-4. Recommendations for similar situations
-
-{pref_desc}
-"""
-                        
-                        llm_response = await self.llm_provider.complete(prompt, max_tokens=200)
-                        knowledge["synthesized_principles"] = llm_response
-                        knowledge["has_synthesis"] = True
-                        
-                    except Exception as e:
-                        logger.warning(f"Failed to synthesize preferences: {e}")
-                        knowledge["has_synthesis"] = False
-                
-                semantic_knowledge.append(knowledge)
-        
-        # Extract cross-cutting insights if we have LLM
-        if self.llm_provider and len(patterns) > 5:
-            try:
-                # Create a summary of all patterns
-                pattern_summary = "Detected patterns:\n"
-                for p in patterns[:15]:  # Limit to top patterns
-                    pattern_summary += f"- {p['name']} ({p['pattern_type']}): {p.get('frequency', 0)} times\n"
-                
-                prompt = f"""Analyze these patterns holistically and identify:
-1. The developer's overall workflow style
-2. Common themes across different patterns
-3. Areas of strength and efficiency
-4. Potential areas for improvement
-5. Recommended best practices based on these patterns
-
-{pattern_summary}
-"""
-                
-                llm_response = await self.llm_provider.complete(prompt, max_tokens=300)
-                
-                meta_knowledge = {
-                    "type": "semantic_meta",
-                    "name": "Workflow Analysis",
-                    "description": "Cross-cutting insights from all patterns",
-                    "confidence": 0.8,
-                    "key_attributes": {
-                        "total_patterns": len(patterns),
-                        "analysis": llm_response
-                    },
-                    "has_meta_analysis": True
-                }
-                semantic_knowledge.append(meta_knowledge)
-                
-            except Exception as e:
-                logger.warning(f"Failed to extract meta insights: {e}")
-        
-        # Store semantic knowledge
-        for knowledge in semantic_knowledge:
-            await self._store_consolidated_memory(knowledge, "semantic")
+    async def _identify_work_sessions_with_llm(self, interactions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Use LLM to identify natural work sessions from interactions."""
+        # Build prompt for session identification
+        interaction_summaries = []
+        for i, interaction in enumerate(interactions):
+            interaction_summaries.append({
+                "index": i,
+                "timestamp": interaction.get('timestamp'),
+                "query": interaction.get('user_query', '')[:100],
+                "success": interaction.get('success', False)
+            })
             
-        return len(semantic_knowledge)
-    
-    async def _create_work_summary(self, interactions: List[Dict]) -> Optional[Dict]:
-        """Create a summary of a work session using LLM for semantic understanding."""
-        if not interactions:
+        prompt = f"""Analyze these interactions and group them into natural work sessions.
+A work session is a sequence of related interactions working toward a common goal.
+
+Interactions:
+{json.dumps(interaction_summaries, indent=2)}
+
+Group the interactions by their index numbers into sessions. Return JSON:
+{{
+    "sessions": [
+        {{
+            "indices": [0, 1, 2],
+            "goal": "Brief description of session goal",
+            "confidence": 0.8
+        }}
+    ]
+}}"""
+
+        response = await self.llm_service._execute_request(
+            self.llm_service._build_request(
+                prompt=prompt,
+                response_format='json',
+                temperature=0.3
+            )
+        )
+        
+        if response.error or not response.content:
+            # Fallback to time-based grouping
+            return self._fallback_session_grouping(interactions)
+            
+        # Build sessions from LLM response
+        sessions = []
+        for session_data in response.content.get('sessions', []):
+            session_interactions = [
+                interactions[i] for i in session_data['indices']
+                if i < len(interactions)
+            ]
+            
+            if session_interactions:
+                sessions.append({
+                    'interactions': session_interactions,
+                    'goal': session_data.get('goal', 'Unknown goal'),
+                    'confidence': session_data.get('confidence', 0.5)
+                })
+                
+        return sessions
+        
+    async def _create_working_memory_with_llm(self, session: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Create a working memory entry from a session using LLM analysis."""
+        # Build prompt for pattern extraction
+        actions_summary = []
+        for interaction in session['interactions']:
+            actions_summary.extend(interaction.get('actions_taken', []))
+            
+        prompt = f"""Analyze this work session and extract the key pattern or workflow.
+
+Session Goal: {session['goal']}
+Number of Interactions: {len(session['interactions'])}
+Actions Taken: {json.dumps(actions_summary, indent=2)}
+
+Extract:
+1. The core workflow or pattern
+2. Key insights about user preferences
+3. Recommendations for future similar tasks
+
+Return JSON with pattern details."""
+
+        response = await self.llm_service._execute_request(
+            self.llm_service._build_request(
+                prompt=prompt,
+                response_format='json',
+                temperature=0.5
+            )
+        )
+        
+        if response.error:
             return None
             
-        # Extract basic information
-        actions = [i['action'] for i in interactions]
-        files = [i.get('file_path') for i in interactions if i.get('file_path')]
-        details = [i.get('details', {}) for i in interactions]
+        pattern_data = response.content
         
-        # Count action types
-        action_counts = defaultdict(int)
-        for action in actions:
-            action_counts[action] += 1
-            
-        # Find the time range
-        timestamps = [datetime.fromisoformat(i['timestamp']) for i in interactions]
-        start_time = min(timestamps)
-        end_time = max(timestamps)
-        duration = (end_time - start_time).total_seconds() / 60  # minutes
-        
-        # Basic summary
-        basic_summary = {
-            "type": "work_session",
-            "start_time": start_time.isoformat(),
-            "end_time": end_time.isoformat(),
-            "duration_minutes": duration,
-            "files_touched": list(set(files)),
-            "action_summary": dict(action_counts),
-            "total_actions": len(interactions),
-            "session_id": interactions[0].get('session_id')
+        # Create working memory pattern
+        pattern = {
+            "name": f"Workflow: {session['goal']}",
+            "description": pattern_data.get('workflow', 'Extracted workflow pattern'),
+            "pattern_type": "consolidated_working",
+            "sequence": {
+                "actions": actions_summary,
+                "insights": pattern_data.get('insights', []),
+                "recommendations": pattern_data.get('recommendations', [])
+            },
+            "frequency": len(session['interactions']),
+            "confidence": session['confidence'],
+            "metadata": {
+                "session_goal": session['goal'],
+                "interaction_count": len(session['interactions']),
+                "llm_extracted": True
+            }
         }
         
-        # Use LLM to extract semantic meaning if available
-        if self.llm_provider:
-            try:
-                # Create a narrative of the work session
-                narrative = f"Work session analysis:\n"
-                narrative += f"Duration: {duration:.1f} minutes\n"
-                narrative += f"Files worked on: {', '.join(set(files))}\n"
-                narrative += f"Actions performed:\n"
-                
-                for i, interaction in enumerate(interactions[:10]):  # Limit to avoid token overflow
-                    action = interaction['action']
-                    file_path = interaction.get('file_path', 'N/A')
-                    detail_str = str(interaction.get('details', {}))[:100]
-                    narrative += f"  {i+1}. {action} on {file_path}: {detail_str}\n"
-                
-                # Ask LLM to summarize the work
-                prompt = f"""Analyze this work session and provide:
-1. A one-sentence summary of what was accomplished
-2. The primary goal or task being worked on
-3. Any patterns or workflow detected
-4. Suggested improvements or next steps
-
-{narrative}
-"""
-                
-                llm_response = await self.llm_provider.complete(prompt, max_tokens=200)
-                
-                # Add semantic understanding to summary
-                basic_summary["semantic_summary"] = llm_response
-                basic_summary["has_semantic_analysis"] = True
-                
-            except Exception as e:
-                logger.warning(f"Failed to get LLM summary: {e}")
-                basic_summary["has_semantic_analysis"] = False
-        else:
-            basic_summary["has_semantic_analysis"] = False
+        return pattern
         
-        return basic_summary
-    
-    async def _create_episode_summary(self, interactions: List[Dict]) -> Optional[Dict]:
-        """Create a summary of an episode with semantic understanding."""
-        if not interactions:
+    async def _create_episodic_memories_with_llm(self, working_memories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Use LLM to create episodic memories from working memories."""
+        # Group similar working memories
+        memory_summaries = []
+        for mem in working_memories[:20]:  # Limit to recent 20
+            memory_summaries.append({
+                "name": mem['name'],
+                "frequency": mem.get('frequency', 1),
+                "confidence": mem.get('confidence', 0.5)
+            })
+            
+        prompt = f"""Analyze these working memory patterns and identify broader episodes or themes.
+
+Working Memories:
+{json.dumps(memory_summaries, indent=2)}
+
+Group related patterns into episodes that represent complete workflows or objectives.
+Return JSON with episode descriptions."""
+
+        response = await self.llm_service._execute_request(
+            self.llm_service._build_request(
+                prompt=prompt,
+                response_format='json',
+                temperature=0.5
+            )
+        )
+        
+        if response.error:
+            return []
+            
+        episodes = []
+        for episode_data in response.content.get('episodes', []):
+            episode = {
+                "name": f"Episode: {episode_data.get('theme', 'Unknown')}",
+                "description": episode_data.get('description', ''),
+                "pattern_type": "episodic_memory",
+                "sequence": episode_data,
+                "frequency": episode_data.get('frequency', 1),
+                "confidence": episode_data.get('confidence', 0.7),
+                "metadata": {
+                    "llm_generated": True,
+                    "source_count": len(working_memories)
+                }
+            }
+            episodes.append(episode)
+            
+        return episodes
+        
+    async def _extract_semantic_knowledge_with_llm(self, episodic_memories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Use LLM to extract semantic knowledge from episodic memories."""
+        # Summarize episodes
+        episode_summaries = []
+        for ep in episodic_memories[:15]:  # Limit to recent 15
+            episode_summaries.append({
+                "name": ep['name'],
+                "description": ep.get('description', ''),
+                "frequency": ep.get('frequency', 1)
+            })
+            
+        prompt = f"""Analyze these episodic memories and extract high-level semantic knowledge.
+
+Episodes:
+{json.dumps(episode_summaries, indent=2)}
+
+Extract:
+1. Core principles or patterns that apply across episodes
+2. User preferences and working style
+3. Domain-specific insights
+4. Recommendations for optimizing workflows
+
+Return JSON with semantic knowledge entries."""
+
+        response = await self.llm_service._execute_request(
+            self.llm_service._build_request(
+                prompt=prompt,
+                response_format='json',
+                temperature=0.6
+            )
+        )
+        
+        if response.error:
+            return []
+            
+        knowledge_entries = []
+        for knowledge_data in response.content.get('knowledge', []):
+            entry = {
+                "name": f"Principle: {knowledge_data.get('principle', 'Unknown')}",
+                "description": knowledge_data.get('description', ''),
+                "pattern_type": "semantic_knowledge",
+                "sequence": knowledge_data,
+                "frequency": len(episodic_memories),
+                "confidence": knowledge_data.get('confidence', 0.8),
+                "metadata": {
+                    "knowledge_type": knowledge_data.get('type', 'general'),
+                    "llm_extracted": True,
+                    "applicability": knowledge_data.get('applicability', 'general')
+                }
+            }
+            knowledge_entries.append(entry)
+            
+        return knowledge_entries
+        
+    async def _consolidate_to_world_model(self, interactions: List[Dict[str, Any]]) -> Optional[WorldState]:
+        """Build world model from interactions using LLM."""
+        try:
+            # Process each interaction through the world model
+            for interaction in interactions:
+                await self.world_inferencer.infer_from_interaction(interaction)
+                
+            # Get the current world state
+            world_state = self.world_inferencer.current_world
+            
+            # Store as semantic memory
+            await self._store_world_as_semantic(world_state)
+            
+            return world_state
+            
+        except Exception as e:
+            logger.error(f"Failed to consolidate world model: {e}")
             return None
             
-        work_summary = await self._create_work_summary(interactions)
-        if not work_summary:
-            return None
-            
-        # Add episode-specific information
-        work_summary["type"] = "episode"
+    async def _store_world_as_semantic(self, world: WorldState):
+        """Store world model as semantic knowledge."""
+        semantic_entry = {
+            "name": f"World Model: {world.domain or 'Emerging'}",
+            "description": f"Dynamic world model with {len(world.entities)} entities",
+            "confidence": world.domain_confidence,
+            "pattern_type": "semantic_knowledge",
+            "sequence": world.to_dict(),
+            "frequency": len(world.entities),
+            "metadata": {
+                "domain": world.domain,
+                "entity_types": list(world.discovered_entity_types),
+                "relation_types": list(world.discovered_relation_types),
+                "goal_count": len(world.inferred_goals),
+                "is_world_model": True,
+                "dynamic": True
+            }
+        }
         
-        # Identify the main focus of the episode
-        files = [i.get('file_path') for i in interactions if i.get('file_path')]
-        if files:
-            file_counts = defaultdict(int)
-            for f in files:
-                file_counts[f] += 1
-            main_file = max(file_counts.items(), key=lambda x: x[1])[0]
-            work_summary["main_focus"] = main_file
-            
-        # Identify the workflow pattern if any
-        action_sequence = [i['action'] for i in interactions[:10]]  # First 10 actions
-        work_summary["action_sequence_sample"] = action_sequence
+        await self.memory.store.add_pattern(semantic_entry)
         
-        # Use LLM to extract episode narrative if available
-        if self.llm_provider and work_summary.get("has_semantic_analysis"):
-            try:
-                # Create episode context
-                episode_context = f"""Episode Context:
-Total interactions: {len(interactions)}
-Duration: {work_summary['duration_minutes']:.1f} minutes
-Main file focus: {work_summary.get('main_focus', 'various files')}
-Files touched: {', '.join(work_summary['files_touched'][:5])}
-Previous work summary: {work_summary.get('semantic_summary', 'N/A')}
-
-Action sequence pattern: {' -> '.join(action_sequence[:10])}
-"""
+    def _fallback_session_grouping(self, interactions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Fallback to time-based session grouping."""
+        sessions = []
+        current_session = []
+        
+        for i, interaction in enumerate(interactions):
+            if not current_session:
+                current_session.append(interaction)
+            else:
+                # Check time gap
+                last_time = datetime.fromisoformat(current_session[-1]['timestamp'])
+                curr_time = datetime.fromisoformat(interaction['timestamp'])
                 
-                # Ask LLM to create episode narrative
-                prompt = f"""Based on this episode of work, create:
-1. A narrative description of what happened (2-3 sentences)
-2. The likely problem being solved or feature being implemented
-3. Key learnings or insights from this episode
-4. Success indicators or blockers encountered
-
-{episode_context}
-"""
-                
-                llm_response = await self.llm_provider.complete(prompt, max_tokens=250)
-                
-                work_summary["episode_narrative"] = llm_response
-                work_summary["has_episode_analysis"] = True
-                
-            except Exception as e:
-                logger.warning(f"Failed to get episode narrative: {e}")
-                work_summary["has_episode_analysis"] = False
-        
-        return work_summary
-    
-    async def _store_consolidated_memory(self, memory: Dict, memory_type: str) -> None:
-        """Store a consolidated memory."""
-        memory["memory_type"] = memory_type
-        memory["consolidated_at"] = datetime.now().isoformat()
-        
-        # Store as a special type of pattern for now
-        # In a full implementation, this would be a separate table
-        await self.memory.store.add_pattern({
-            "name": f"{memory_type}: {memory.get('name', memory['type'])}",
-            "description": memory.get('description', str(memory)),
-            "pattern_type": f"consolidated_{memory_type}",
-            "sequence": [],
-            "frequency": 1,
-            "confidence": memory.get('confidence', 0.8),
-            "metadata": memory
-        })
-    
-    async def _cleanup_old_memories(self) -> int:
-        """Clean up memories that have been fully consolidated to higher tiers."""
-        # In a full implementation, this would:
-        # 1. Archive interactions that are in working memories
-        # 2. Archive working memories that are in episodes  
-        # 3. Archive episodes that contributed to semantic knowledge
-        # 4. Keep only the highest tier representation
-        
-        # For now, return the count from _cleanup_promoted_memories
-        return await self._cleanup_promoted_memories()
-    
-    async def get_relevant_memories(self, context: str, 
-                                  memory_types: List[str] = None) -> List[Dict]:
-        """Retrieve relevant memories based on context."""
-        if memory_types is None:
-            memory_types = ["working", "episodic", "semantic"]
-            
-        relevant_memories = []
-        all_patterns = await self.memory.get_all_patterns()
-        
-        # Filter by memory type and search for relevance
-        context_lower = context.lower()
-        for pattern in all_patterns:
-            pattern_type = pattern.get('pattern_type', '')
-            
-            # Check if it's a consolidated memory
-            for mem_type in memory_types:
-                if f"consolidated_{mem_type}" in pattern_type:
-                    # Simple relevance check
-                    metadata = pattern.get('metadata', {})
-                    if self._is_relevant(metadata, context_lower):
-                        relevant_memories.append({
-                            "memory": metadata,
-                            "type": mem_type,
-                            "relevance": self._calculate_relevance(metadata, context_lower)
+                if curr_time - last_time < timedelta(minutes=30):
+                    current_session.append(interaction)
+                else:
+                    # Start new session
+                    if len(current_session) >= self.min_interactions_per_session:
+                        sessions.append({
+                            'interactions': current_session,
+                            'goal': 'Time-based session',
+                            'confidence': 0.5
                         })
-                        
-        # Sort by relevance
-        relevant_memories.sort(key=lambda x: x['relevance'], reverse=True)
-        return relevant_memories[:10]  # Return top 10
-    
-    def _is_relevant(self, memory: Dict, context: str) -> bool:
-        """Check if a memory is relevant to the context."""
-        # Simple keyword matching for now
-        memory_str = str(memory).lower()
-        context_words = context.split()
+                    current_session = [interaction]
+                    
+        # Don't forget the last session
+        if len(current_session) >= self.min_interactions_per_session:
+            sessions.append({
+                'interactions': current_session,
+                'goal': 'Time-based session',
+                'confidence': 0.5
+            })
+            
+        return sessions
         
-        matches = sum(1 for word in context_words if word in memory_str)
-        return matches >= 2  # At least 2 word matches
-    
-    def _calculate_relevance(self, memory: Dict, context: str) -> float:
-        """Calculate relevance score."""
-        memory_str = str(memory).lower()
-        context_words = context.split()
-        
-        matches = sum(1 for word in context_words if word in memory_str)
-        return matches / len(context_words) if context_words else 0.0
+    async def _cleanup_promoted_memories(self) -> int:
+        """Archive consolidated memories."""
+        # This would archive old interactions that have been consolidated
+        # Implementation depends on your archive strategy
+        return 0

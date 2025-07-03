@@ -21,15 +21,20 @@ from .core.interaction_model import Action, FeedbackType, Interaction
 from .core.interaction_pattern_detector import InteractionPatternDetector
 from .core.memory import Memory
 from .core.pattern_detector import PatternDetector
+from .core.llm_service import LLMService
 from .sleep.config_validator import SleepConfigValidator
 from .sleep.llm_providers import create_llm_providers
 from .sleep.prompt_optimizer import PromptOptimizer
 from .sleep.sleep import Observation, Sleep
 from .storage.hybrid_store import HybridStore
 from .storage.sqlite_store import SQLiteStore
+from .config_loader import load_config as load_json_config, get_vector_backend, get_memory_path
 from .utils.logging_config import get_logger, setup_logging, setup_production_logging
 from .utils.log_utils import async_log_context, create_interaction_logger as create_log_context
 from .utils.mcp_logging import mcp_tool_logger, mcp_resource_logger, with_interaction_logging, log_tool_metric
+from .health import health_checker
+from .rate_limiter import RateLimiter, RateLimitMiddleware, create_default_rate_limiter
+from .utils.rate_limit_decorator import rate_limited, apply_rate_limiter_to_tools
 
 # Configure logging based on environment
 if os.environ.get("BICAMRL_ENV") == "production":
@@ -47,6 +52,7 @@ interaction_logger: Optional[InteractionLogger] = None
 interaction_pattern_detector: Optional[InteractionPatternDetector] = None
 sleep_layer: Optional[Sleep] = None
 prompt_optimizer: Optional[PromptOptimizer] = None
+rate_limiter: Optional[RateLimiter] = None
 config: Dict[str, Any] = {}
 
 
@@ -63,6 +69,7 @@ async def initialize_server():
         interaction_pattern_detector, \
         sleep_layer, \
         prompt_optimizer, \
+        rate_limiter, \
         config
 
     # Load configuration
@@ -76,9 +83,10 @@ async def initialize_server():
             }
         )
 
-    # Get database path
-    db_path = os.environ.get("MEMORY_DB_PATH", ".bicamrl/memory")
-    logger.info(f"Using database path: {db_path}")
+    # Get database path and vector backend from config
+    db_path = str(get_memory_path(config))
+    vector_backend = get_vector_backend(config)
+    logger.info(f"Using database path: {db_path}, vector backend: {vector_backend}")
 
     # Check if we should enable LLM embeddings
     llm_embeddings = None
@@ -110,10 +118,18 @@ async def initialize_server():
                     extra={'error_type': type(e).__name__, 'error': str(e)}
                 )
     
-    # Initialize core components with optional embeddings
+    # Initialize LLM service for all components
+    llm_config = {
+        "default_provider": config.get("default_llm_provider", "openai"),
+        "llm_providers": config.get("llm_providers", {}),
+        "rate_limit": config.get("llm_rate_limit", 60)
+    }
+    llm_service = LLMService(llm_config)
+    
+    # Initialize core components with LLM service
     async with async_log_context(logger, "initialize_core_components"):
-        memory = Memory(db_path, llm_embeddings)
-        pattern_detector = PatternDetector(memory)
+        memory = Memory(db_path, llm_service=llm_service, llm_embeddings=llm_embeddings, vector_backend=vector_backend)
+        # pattern_detector is now part of memory
         feedback_processor = FeedbackProcessor(memory)
         interaction_logger = InteractionLogger(memory)
         interaction_pattern_detector = InteractionPatternDetector(memory)
@@ -121,8 +137,27 @@ async def initialize_server():
         logger.info(
             "Core components initialized",
             extra={
+                'has_llm_service': True,
                 'has_embeddings': llm_embeddings is not None,
-                'session_id': memory.session_id
+                'session_id': memory.session_id,
+                'default_llm_provider': llm_config['default_provider']
+            }
+        )
+    
+    # Initialize rate limiter
+    async with async_log_context(logger, "initialize_rate_limiter"):
+        rate_limiter_config = config.get("rate_limiting", {})
+        rate_limiter = RateLimiter(
+            requests_per_minute=rate_limiter_config.get("requests_per_minute", 60),
+            burst_size=rate_limiter_config.get("burst_size", 10),
+            window_seconds=rate_limiter_config.get("window_seconds", 60)
+        )
+        logger.info(
+            "Rate limiter initialized",
+            extra={
+                'requests_per_minute': rate_limiter.requests_per_minute,
+                'burst_size': rate_limiter.burst_size,
+                'window_seconds': rate_limiter.window_seconds
             }
         )
 
@@ -204,8 +239,9 @@ async def cleanup_server():
 
 
 def load_config() -> Dict[str, Any]:
-    """Load configuration from Mind.toml or environment."""
-    config = {}
+    """Load configuration from Mind.toml and JSON config files."""
+    # Start with JSON config (includes vector store settings)
+    config = load_json_config()
 
     # Try to load from Mind.toml first
     mind_toml_paths = [
@@ -297,6 +333,12 @@ def expand_env_vars(obj: Any) -> Any:
 async def server_lifespan(server: FastMCP) -> AsyncIterator[None]:
     """Manage server lifecycle."""
     await initialize_server()
+    
+    # Apply rate limiter to all tools
+    if rate_limiter:
+        apply_rate_limiter_to_tools(server, rate_limiter)
+        logger.info("Rate limiting applied to MCP tools")
+    
     try:
         yield
     finally:
@@ -310,6 +352,97 @@ mcp = FastMCP(
 
 
 # Resources
+
+# Health Check Resources
+@mcp.resource("health://status")
+@mcp_resource_logger("health_status")
+async def health_status() -> Resource:
+    """Get overall health status of the server."""
+    health_data = await health_checker.check_all(
+        memory=memory,
+        sleep_layer=sleep_layer,
+        pattern_detector=pattern_detector,
+        feedback_processor=feedback_processor
+    )
+    
+    return Resource(
+        uri="health://status",
+        name="Health Status",
+        description="Overall health status of Bicamrl server",
+        mimeType="application/json",
+        text=json.dumps(health_data, indent=2, default=str),
+    )
+
+
+@mcp.resource("health://ready")
+@mcp_resource_logger("health_ready")
+async def health_ready() -> Resource:
+    """Check if server is ready to handle requests."""
+    is_ready = memory is not None and pattern_detector is not None
+    
+    ready_data = {
+        "ready": is_ready,
+        "timestamp": datetime.now().isoformat(),
+        "components": {
+            "memory": memory is not None,
+            "pattern_detector": pattern_detector is not None,
+            "feedback_processor": feedback_processor is not None,
+            "interaction_logger": interaction_logger is not None,
+        }
+    }
+    
+    return Resource(
+        uri="health://ready",
+        name="Readiness Check",
+        description="Check if server is ready to handle requests",
+        mimeType="application/json",
+        text=json.dumps(ready_data, indent=2),
+    )
+
+
+@mcp.resource("health://live")
+@mcp_resource_logger("health_live")
+async def health_live() -> Resource:
+    """Simple liveness check."""
+    return Resource(
+        uri="health://live",
+        name="Liveness Check",
+        description="Simple liveness probe",
+        mimeType="application/json",
+        text=json.dumps({
+            "alive": True,
+            "timestamp": datetime.now().isoformat(),
+            "server": "bicamrl",
+            "version": "1.0.0"
+        }, indent=2),
+    )
+
+
+@mcp.resource("health://rate-limits")
+@mcp_resource_logger("rate_limit_status")
+async def rate_limit_status() -> Resource:
+    """Get rate limiting status and metrics."""
+    if not rate_limiter:
+        return Resource(
+            uri="health://rate-limits",
+            name="Rate Limit Status",
+            description="Rate limiting not configured",
+            mimeType="application/json",
+            text=json.dumps({"error": "Rate limiting not configured"}, indent=2),
+        )
+    
+    metrics = rate_limiter.get_metrics()
+    
+    return Resource(
+        uri="health://rate-limits",
+        name="Rate Limit Status", 
+        description="Current rate limiting metrics and configuration",
+        mimeType="application/json",
+        text=json.dumps(metrics, indent=2, default=str),
+    )
+
+
+# Pattern Resources
 @mcp.resource("memory://patterns")
 @mcp_resource_logger("get_patterns")
 async def get_patterns() -> Resource:
@@ -417,6 +550,37 @@ async def get_prompt_templates() -> Resource:
         mimeType="application/json",
         text=json.dumps(templates, indent=2),
     )
+
+
+@mcp.resource("memory://sleep/world-model")
+async def get_world_model_resource() -> Resource:
+    """Get current world model understanding."""
+    if not sleep_layer:
+        return Resource(
+            uri="memory://sleep/world-model",
+            name="World Model",
+            description="Sleep layer not enabled",
+            mimeType="application/json",
+            text=json.dumps({"error": "Sleep layer not enabled"})
+        )
+    
+    try:
+        world_understanding = await sleep_layer.get_current_world_understanding()
+        return Resource(
+            uri="memory://sleep/world-model",
+            name="World Model",
+            description="Current world model understanding",
+            mimeType="application/json",
+            text=json.dumps(world_understanding, indent=2)
+        )
+    except Exception as e:
+        return Resource(
+            uri="memory://sleep/world-model",
+            name="World Model",
+            description="Error getting world model",
+            mimeType="application/json",
+            text=json.dumps({"error": str(e)})
+        )
 
 
 @mcp.resource("memory://sleep/status")
@@ -570,6 +734,7 @@ async def get_role_statistics() -> Resource:
 @mcp.tool()
 @mcp_tool_logger("start_interaction")
 @with_interaction_logging
+@rate_limited(cost=1.0)
 async def start_interaction(
     user_query: str, context: Optional[Dict[str, Any]] = None
 ) -> Dict[str, str]:
@@ -709,6 +874,7 @@ async def log_action(
 
 @mcp.tool()
 @mcp_tool_logger("complete_interaction")
+@rate_limited(cost=2.0)  # Higher cost because it triggers pattern detection
 async def complete_interaction(
     feedback: Optional[str] = None, success: Optional[bool] = None
 ) -> Dict[str, Any]:
@@ -795,6 +961,7 @@ async def complete_interaction(
 
 @mcp.tool()
 @mcp_tool_logger("detect_pattern")
+@rate_limited(cost=1.5)  # Pattern detection is moderately expensive
 async def detect_pattern(action_sequence: List[str]) -> Dict[str, Any]:
     """
     Check if current action sequence matches known patterns.
@@ -1235,3 +1402,86 @@ async def discover_roles() -> Dict[str, Any]:
             "error": f"Role discovery failed: {str(e)}",
             "hint": "Ensure you have sufficient interaction history (20+ interactions)",
         }
+
+
+@mcp.tool()
+@mcp_tool_logger("get_world_model_proposals")
+async def get_world_model_proposals(limit: int = 5) -> Dict[str, Any]:
+    """
+    Get goal-directed proposals based on world model understanding.
+    
+    Args:
+        limit: Maximum number of proposals to return
+        
+    Returns:
+        Dict containing proposals and current world understanding
+    """
+    if not sleep_layer:
+        return {"error": "Sleep layer not enabled"}
+    
+    try:
+        # Get recent interactions
+        recent_interactions = await memory.store.get_recent_complete_interactions(
+            hours=24, limit=50
+        )
+        
+        # Get world model proposals
+        proposals = await sleep_layer.get_world_model_proposals(recent_interactions)
+        
+        # Get current world understanding
+        world_understanding = await sleep_layer.get_current_world_understanding()
+        
+        # Format proposals
+        proposal_list = []
+        for i, proposal in enumerate(proposals[:limit]):
+            proposal_list.append({
+                "id": f"proposal_{i}",
+                "type": proposal.type.value,
+                "description": proposal.description,
+                "rationale": proposal.rationale,
+                "confidence": proposal.confidence,
+                "suggested_actions": proposal.suggested_actions,
+                "expected_state_change": proposal.expected_state_change,
+                "alternatives": proposal.alternatives
+            })
+        
+        return {
+            "proposals": proposal_list,
+            "world_understanding": world_understanding,
+            "proposal_count": len(proposals),
+            "recent_interactions_analyzed": len(recent_interactions)
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get world model proposals: {e}")
+        return {"error": str(e)}
+
+
+@mcp.tool()
+@mcp_tool_logger("provide_proposal_feedback")
+async def provide_proposal_feedback(
+    proposal_id: str,
+    feedback: str,
+    success: bool
+) -> str:
+    """
+    Provide feedback on a world model proposal.
+    
+    Args:
+        proposal_id: ID of the proposal
+        feedback: Feedback text
+        success: Whether the proposal was helpful
+        
+    Returns:
+        Confirmation message
+    """
+    if not sleep_layer:
+        return "Error: Sleep layer not enabled"
+    
+    try:
+        await sleep_layer.update_world_model_from_feedback(
+            proposal_id, feedback, success
+        )
+        return f"Feedback recorded for {proposal_id}"
+    except Exception as e:
+        return f"Error recording feedback: {str(e)}"

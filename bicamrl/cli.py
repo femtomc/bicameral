@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Command-line interface for memory system."""
+"""Bicamrl command-line interface."""
 
 import asyncio
 import click
@@ -8,7 +8,7 @@ from pathlib import Path
 from datetime import datetime
 
 from .core.memory import Memory
-from .core.feedback_processor import FeedbackProcessor
+from .cli.tui import run_tui
 
 DEFAULT_DB_PATH = ".bicamrl/memory"
 
@@ -16,149 +16,33 @@ DEFAULT_DB_PATH = ".bicamrl/memory"
 @click.option('--db-path', default=DEFAULT_DB_PATH, help='Path to memory database')
 @click.pass_context
 def cli(ctx, db_path):
-    """AI Memory System CLI."""
+    """Bicamrl - Persistent memory system for AI assistants."""
     ctx.ensure_object(dict)
     ctx.obj['db_path'] = db_path
     ctx.obj['memory'] = Memory(db_path)
 
 @cli.command()
-@click.argument('feedback_type', type=click.Choice(['correct', 'prefer', 'pattern']))
-@click.argument('message')
 @click.pass_context
-def feedback(ctx, feedback_type, message):
-    """Record feedback for AI learning."""
-    async def _feedback():
-        memory_manager = ctx.obj['memory']
-        processor = FeedbackProcessor(memory_manager)
-        result = await processor.process_feedback(feedback_type, message)
-        click.echo(f"✓ {result}")
+def dashboard(ctx):
+    """Launch the interactive Bicamrl dashboard.
     
-    asyncio.run(_feedback())
-
-@cli.command()
-@click.argument('action', type=click.Choice(['show', 'search', 'stats', 'clear']))
-@click.argument('query', required=False)
-@click.pass_context
-def memory(ctx, action, query):
-    """Query and manage memory system."""
-    async def _memory():
-        memory_manager = ctx.obj['memory']
-        
-        if action == 'show':
-            if query == 'patterns':
-                patterns = await memory_manager.get_all_patterns()
-                _display_patterns(patterns)
-            elif query == 'preferences':
-                preferences = await memory_manager.get_preferences()
-                _display_preferences(preferences)
-            elif query == 'feedback':
-                feedback = await memory_manager.store.get_feedback()
-                _display_feedback(feedback)
-            else:
-                click.echo("Usage: ai-memory show [patterns|preferences|feedback]")
-                
-        elif action == 'search':
-            if not query:
-                click.echo("Please provide a search query")
-                return
-            results = await memory_manager.search(query)
-            _display_search_results(results)
-            
-        elif action == 'stats':
-            stats = await memory_manager.get_stats()
-            _display_stats(stats)
-            
-        elif action == 'clear':
-            if not query:
-                click.echo("Please specify what to clear: patterns, preferences, feedback, or all")
-                return
-            if query not in ['patterns', 'preferences', 'feedback', 'all']:
-                click.echo(f"Invalid clear target: {query}")
-                return
-                
-            if click.confirm(f"Are you sure you want to clear {query}?"):
-                await memory_manager.clear_specific(query)
-                click.echo(f"✓ Cleared {query}")
+    The dashboard provides:
+    - System overview with real-time statistics
+    - Memory hierarchy browser
+    - Pattern analysis and visualization
+    - Activity monitoring
+    - Search capabilities
     
-    asyncio.run(_memory())
-
-def _display_patterns(patterns):
-    """Display patterns in a readable format."""
-    if not patterns:
-        click.echo("No patterns learned yet.")
-        return
-    
-    click.echo("\n📊 Learned Patterns:")
-    click.echo("-" * 60)
-    
-    for p in patterns:
-        click.echo(f"\n• {p['name']} (confidence: {p['confidence']:.2f})")
-        click.echo(f"  Type: {p['pattern_type']}")
-        click.echo(f"  {p.get('description', 'No description')}")
-        click.echo(f"  Frequency: {p['frequency']} times")
-        if p.get('sequence'):
-            click.echo(f"  Sequence: {' → '.join(p['sequence'][:5])}")
-
-def _display_preferences(preferences):
-    """Display preferences organized by category."""
-    if not preferences:
-        click.echo("No preferences recorded yet.")
-        return
-    
-    click.echo("\n⚙️ Developer Preferences:")
-    click.echo("-" * 60)
-    
-    for category, prefs in preferences.items():
-        click.echo(f"\n{category.title()}:")
-        for key, value in prefs.items():
-            click.echo(f"  • {key}: {value}")
-
-def _display_feedback(feedback):
-    """Display recent feedback."""
-    if not feedback:
-        click.echo("No feedback recorded yet.")
-        return
-    
-    click.echo("\n💬 Recent Feedback:")
-    click.echo("-" * 60)
-    
-    for fb in feedback[:10]:  # Show last 10
-        timestamp = datetime.fromisoformat(fb['timestamp']).strftime("%Y-%m-%d %H:%M")
-        click.echo(f"\n[{timestamp}] {fb['type'].upper()}")
-        click.echo(f"  {fb['message']}")
-        if fb.get('applied'):
-            click.echo("  ✓ Applied")
-
-def _display_search_results(results):
-    """Display search results."""
-    if not results:
-        click.echo("No results found.")
-        return
-    
-    click.echo("\n🔍 Search Results:")
-    click.echo("-" * 60)
-    
-    for r in results[:10]:
-        click.echo(f"\n• {r['type'].title()}: {r['name']}")
-        click.echo(f"  {r.get('description', '')}")
-        if 'file' in r:
-            click.echo(f"  File: {r['file']}")
-        if 'confidence' in r:
-            click.echo(f"  Confidence: {r['confidence']:.2f}")
-
-def _display_stats(stats):
-    """Display memory statistics."""
-    click.echo("\n📈 Memory Statistics:")
-    click.echo("-" * 60)
-    click.echo(f"Total Interactions: {stats['total_interactions']}")
-    click.echo(f"Patterns Learned: {stats['total_patterns']}")
-    click.echo(f"Feedback Received: {stats['total_feedback']}")
-    click.echo(f"Active Sessions (24h): {stats['active_sessions']}")
-    
-    if stats['top_files']:
-        click.echo("\nMost Active Files:")
-        for f in stats['top_files'][:5]:
-            click.echo(f"  • {f}")
+    Navigation:
+    - Tab/Shift+Tab: Switch between tabs
+    - Arrow keys: Navigate within panes
+    - Enter: Select items
+    - q: Quit
+    - r: Refresh data
+    - ?: Show help
+    """
+    db_path = ctx.obj['db_path']
+    run_tui(db_path)
 
 @cli.command()
 @click.pass_context
@@ -170,19 +54,19 @@ def init(ctx):
     # Create initial CLAUDE.md if it doesn't exist
     claude_md = Path("CLAUDE.md")
     if not claude_md.exists():
-        claude_md.write_text("""# AI Assistant Context
+        claude_md.write_text("""# Bicamrl Context
 
-This file is automatically maintained by the AI Memory System.
+This file is automatically maintained by Bicamrl.
 
 ## Getting Started
 
-The memory system is now active. Use these commands:
+The memory system is now active. Use the dashboard to:
+- Monitor system activity
+- View learned patterns
+- Search through interactions
+- Analyze memory hierarchy
 
-- `ai-feedback correct "message"` - Correct mistakes
-- `ai-feedback prefer "message"` - Set preferences  
-- `ai-feedback pattern "message"` - Teach workflows
-- `ai-memory show patterns` - View learned patterns
-- `ai-memory show preferences` - View preferences
+Run `bicamrl dashboard` to launch the interactive interface.
 
 ## Recent Activity
 *Will be populated after first session*
@@ -197,9 +81,9 @@ The memory system is now active. Use these commands:
     
     click.echo(f"✓ Memory system initialized at {db_path}")
     click.echo("\nNext steps:")
-    click.echo("1. Configure your AI tool to use the memory server")
+    click.echo("1. Configure your AI tool to use the Bicamrl MCP server")
     click.echo("2. Start working - the system learns automatically")
-    click.echo("3. Provide feedback to improve understanding")
+    click.echo("3. Use `bicamrl dashboard` to monitor activity")
 
 @cli.command()
 @click.option('--output', '-o', default='memory-export.json', help='Output file')
@@ -207,13 +91,13 @@ The memory system is now active. Use these commands:
 def export(ctx, output):
     """Export memory for sharing or backup."""
     async def _export():
-        memory_manager = ctx.obj['memory']
+        memory = ctx.obj['memory']
         
         data = {
             'exported_at': datetime.now().isoformat(),
-            'patterns': await memory_manager.get_all_patterns(),
-            'preferences': await memory_manager.get_preferences(),
-            'stats': await memory_manager.get_stats()
+            'patterns': await memory.get_all_patterns(),
+            'preferences': await memory.get_preferences(),
+            'stats': await memory.get_stats()
         }
         
         with open(output, 'w') as f:
@@ -223,15 +107,100 @@ def export(ctx, output):
     
     asyncio.run(_export())
 
-@cli.command()
-@click.argument('input_file', type=click.Path(exists=True))
+@cli.command(name='import')
+@click.argument('input_path', type=click.Path(exists=True), required=False)
+@click.option('--format', type=click.Choice(['claude-code', 'bicamrl']), default='claude-code')
+@click.option('--claude-dir', type=click.Path(exists=True), help='Path to .claude directory')
+@click.option('--project-filter', help='Only import conversations from this project path')
+@click.option('--current-project/--all-projects', default=True, help='Import only current project or all projects')
 @click.option('--merge/--replace', default=True, help='Merge with existing or replace')
 @click.pass_context
-def import_(ctx, input_file, merge):
-    """Import memory from file (legacy - not supported in new system)."""
-    click.echo("Import functionality is not yet supported in the new interaction-based system.")
-    click.echo("The system now learns from complete interactions rather than importing patterns.")
-    ctx.exit(1)
+def import_(ctx, input_path, format, claude_dir, project_filter, current_project, merge):
+    """Import memory from Claude Code logs or bicamrl export.
+    
+    Examples:
+        # Import Claude Code conversations for current project only (default)
+        bicamrl import
+        
+        # Import all Claude Code conversations from all projects
+        bicamrl import --all-projects
+        
+        # Import conversations for a specific project
+        bicamrl import --project-filter /Users/femtomc/Dev/agents
+        
+        # Import specific conversation log
+        bicamrl import ~/.claude/projects/-Users-femtomc-Dev-agents/session.jsonl
+        
+        # Import from custom Claude directory
+        bicamrl import --claude-dir /path/to/.claude
+    """
+    async def _import(input_path, format, claude_dir, project_filter, current_project, merge):
+        from .core.memory import Memory
+        from .storage.sqlite_store import SQLiteStore
+        import os
+        
+        # Initialize memory
+        db_path = Path.home() / ".bicamrl" / "memory"
+        memory = Memory(db_path)
+        
+        if format == 'claude-code':
+            from .importers.claude_code_importer import ClaudeCodeImporter
+            importer = ClaudeCodeImporter(memory)
+            
+            if input_path is not None:
+                # Import specific file
+                input_path = Path(input_path)
+                if input_path.is_file() and input_path.suffix == '.jsonl':
+                    click.echo(f"Importing Claude Code log: {input_path}")
+                    stats = await importer.import_conversation_log(input_path)
+                    click.echo(f"✓ Imported: {stats['interactions']} interactions, {stats['actions']} actions")
+                else:
+                    click.echo("Error: Input must be a .jsonl file", err=True)
+                    ctx.exit(1)
+            else:
+                # Import directory with filtering
+                claude_path = Path(claude_dir) if claude_dir else Path.home() / ".claude"
+                
+                # Determine project filter
+                if project_filter:
+                    # Use explicit filter
+                    filter_path = project_filter
+                elif current_project:
+                    # Use current working directory as filter
+                    filter_path = os.getcwd()
+                else:
+                    # Import all projects
+                    filter_path = None
+                
+                if filter_path:
+                    click.echo(f"Importing Claude Code conversations for project: {filter_path}")
+                else:
+                    click.echo(f"Importing all Claude Code conversations from: {claude_path}")
+                
+                with click.progressbar(length=100, label='Importing conversations') as bar:
+                    stats = await importer.import_directory(claude_path, project_filter=filter_path)
+                    bar.update(100)
+                
+                click.echo("\n✓ Import complete!")
+                click.echo(f"  Sessions: {stats['sessions']}")
+                click.echo(f"  Interactions: {stats['interactions']}")
+                click.echo(f"  Actions: {stats['actions']}")
+                click.echo(f"  Patterns detected: {stats['patterns']}")
+                if stats.get('skipped_projects', 0) > 0:
+                    click.echo(f"  Skipped projects: {stats['skipped_projects']}")
+                if stats.get('errors', 0) > 0:
+                    click.echo(f"  Errors: {stats['errors']}", fg='yellow')
+                    
+            # Run memory consolidation after import
+            click.echo("\nConsolidating memories...")
+            consolidation_stats = await memory.consolidate_memories()
+            click.echo(f"✓ Consolidated: {consolidation_stats}")
+            
+        else:
+            # Original bicamrl format import
+            click.echo("Bicamrl format import not yet implemented")
+            
+    asyncio.run(_import(input_path, format, claude_dir, project_filter, current_project, merge))
 
 if __name__ == '__main__':
     cli()

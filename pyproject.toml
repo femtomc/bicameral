@@ -31,6 +31,7 @@ dependencies = [
     "pydantic>=2.0.0",
     "aiohttp>=3.9.0",
     "tomli>=2.0.0",
+    "textual>=0.47.0",
 ]
 
 [project.optional-dependencies]
@@ -41,11 +42,15 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.0.0",
 ]
+vector = [
+    "lancedb>=0.5.0",
+    "chromadb>=0.4.0",
+    "pyarrow>=14.0.0",  # Required by lancedb
+]
 
 [project.scripts]
 bicamrl = "bicamrl.__main__:main"
-bicamrl-feedback = "bicamrl.cli:feedback"
-bicamrl-memory = "bicamrl.cli:memory"
+bicamrl-dashboard = "bicamrl.cli:dashboard"
 
 [project.entry-points."mcp.server"]
 bicamrl = "bicamrl:server"

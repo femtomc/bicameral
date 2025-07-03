@@ -1,5 +1,10 @@
 # Bicamrl
 
+> **⚠️ EXPERIMENTAL: DO NOT USE YET!**
+> 
+> This project is under active development and is not ready for production use.
+> APIs, data formats, and behaviors may change without notice.
+
 A persistent memory and behavior system for AI assistants using MCP (Model Context Protocol).
 
 **Works with any MCP-compatible AI client** - Claude Desktop, custom implementations, or future MCP adopters.

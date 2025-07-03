@@ -13,6 +13,7 @@ from ..core.pattern_detector import PatternDetector
 from ..storage.hybrid_store import HybridStore
 from .role_manager import RoleManager
 from .roles import CommandRole
+from .world_model_sleep import WorldModelSleep, GoalDirectedProposal
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,12 @@ class Sleep:
         # Role management with hybrid store for better discovery
         self.role_manager = RoleManager(memory, hybrid_store, config)
         self.current_role: Optional[CommandRole] = None
+        
+        # World model-based reasoning
+        self.world_model_sleep = WorldModelSleep(
+            memory, 
+            llm_providers.get('analyzer') if llm_providers else None
+        )
         
     async def start(self):
         """Start the sleep background tasks."""
@@ -668,3 +675,89 @@ Return as JSON."""
     async def get_role_recommendations(self, context: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Get role recommendations for a given context."""
         return await self.role_manager.get_role_recommendations(context)
+    
+    async def get_world_model_proposals(self, recent_interactions: List[Dict[str, Any]]) -> List[GoalDirectedProposal]:
+        """Get goal-directed proposals based on world model understanding."""
+        try:
+            # Analyze current state and goals
+            world_state, inferred_goal = await self.world_model_sleep.analyze_current_state(
+                recent_interactions
+            )
+            
+            if not world_state:
+                return []
+            
+            # Generate current state summary
+            current_state = {
+                "domain": world_state.domain,
+                "entity_count": len(world_state.entities),
+                "recent_success_rate": self._calculate_recent_success_rate(recent_interactions),
+                "active_entities": list(world_state.entities.keys())[:10]
+            }
+            
+            # Generate proposals
+            proposals = await self.world_model_sleep.generate_proposals(current_state)
+            
+            logger.info(
+                f"Generated {len(proposals)} world model proposals",
+                extra={
+                    "domain": world_state.domain,
+                    "goal_type": inferred_goal.get("type") if inferred_goal else "unknown",
+                    "goal_confidence": self.world_model_sleep.goal_confidence
+                }
+            )
+            
+            return proposals
+            
+        except Exception as e:
+            logger.error(f"Failed to generate world model proposals: {e}")
+            return []
+    
+    def _calculate_recent_success_rate(self, interactions: List[Dict[str, Any]]) -> float:
+        """Calculate success rate from recent interactions."""
+        if not interactions:
+            return 1.0
+        
+        successes = sum(1 for i in interactions if i.get("success", False))
+        return successes / len(interactions)
+    
+    async def update_world_model_from_feedback(self, proposal_id: str, feedback: str, success: bool):
+        """Update world model based on feedback on proposals."""
+        # Find the proposal (in a real system, we'd store these)
+        # For now, just log the feedback
+        logger.info(
+            f"World model feedback received",
+            extra={
+                "proposal_id": proposal_id,
+                "feedback": feedback[:100],
+                "success": success
+            }
+        )
+        
+        # In future: Update world model confidence, refine goal understanding, etc.
+    
+    async def get_current_world_understanding(self) -> Dict[str, Any]:
+        """Get the current world model understanding."""
+        if not self.world_model_sleep.current_world:
+            return {"status": "no_world_model"}
+        
+        world = self.world_model_sleep.current_world
+        goal = self.world_model_sleep.inferred_goal
+        
+        return {
+            "domain": world.domain,
+            "entities": {
+                "count": len(world.entities),
+                "types": list(set(e.type.value for e in world.entities.values()))
+            },
+            "relations": {
+                "count": len(world.relations),
+                "types": list(set(r.type.value for r in world.relations))
+            },
+            "inferred_goal": {
+                "type": goal.get("type") if goal else "unknown",
+                "description": goal.get("goal_state") if goal else "not inferred",
+                "confidence": self.world_model_sleep.goal_confidence
+            },
+            "metrics": world.metrics
+        }

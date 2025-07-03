@@ -226,9 +226,11 @@ class RoleManager:
                     self.discoverer.min_interactions_per_role = self.min_interactions_per_role
                 
                 discovered_roles = await self.discoverer.discover_roles_from_interactions(
-                    days_back=30,
-                    max_roles=self.max_active_roles
+                    days_back=30
                 )
+                # Limit to max_active_roles
+                if len(discovered_roles) > self.max_active_roles:
+                    discovered_roles = discovered_roles[:self.max_active_roles]
             else:
                 discovered_roles = await self.discoverer.discover_roles(days_back=7)
             

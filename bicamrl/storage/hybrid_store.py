@@ -18,13 +18,27 @@ logger = get_logger("hybrid_store")
 class HybridStore:
     """Combines SQLite for structured data with vector storage for embeddings."""
     
-    def __init__(self, storage_path: Path, llm_embeddings):
+    def __init__(self, storage_path: Path, llm_embeddings, vector_backend: str = "basic"):
         self.storage_path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
         
         # Initialize sub-stores
         self.sqlite_store = SQLiteStore(self.storage_path / "bicameral.db")
-        self.vector_store = VectorStore(self.storage_path / "vectors")
+        
+        # Initialize vector store based on backend selection
+        vector_path = self.storage_path / "vectors"
+        if vector_backend == "lancedb":
+            from .vector_store import LanceDBVectorStore
+            self.vector_store = LanceDBVectorStore(vector_path)
+            logger.info("Using LanceDB vector backend")
+        elif vector_backend == "chromadb":
+            from .vector_store import ChromaDBVectorStore
+            self.vector_store = ChromaDBVectorStore(vector_path)
+            logger.info("Using ChromaDB vector backend")
+        else:
+            from .vector_store import VectorStore
+            self.vector_store = VectorStore(vector_path)
+            logger.info("Using basic numpy vector backend")
         
         # LLM embeddings (required)
         if not llm_embeddings:

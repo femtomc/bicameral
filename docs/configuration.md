@@ -170,6 +170,98 @@ export PATTERN_CONFIDENCE_THRESHOLD=0.6
 }
 ```
 
+## Vector Database Configuration
+
+Configure which vector database backend to use for embeddings:
+
+```json
+{
+  "vector_store": {
+    "backend": "lancedb",           // Options: "basic", "lancedb", "chromadb"
+    "config": {
+      // Backend-specific configuration
+    }
+  }
+}
+```
+
+### Basic (Numpy) Backend
+Default option, no additional dependencies:
+```json
+{
+  "vector_store": {
+    "backend": "basic"              // Uses numpy arrays with file persistence
+  }
+}
+```
+
+### LanceDB Backend
+High-performance columnar storage:
+```json
+{
+  "vector_store": {
+    "backend": "lancedb",
+    "config": {
+      "index_type": "IVF_PQ",       // Optional: index type for ANN search
+      "metric": "cosine"            // Optional: distance metric
+    }
+  }
+}
+```
+
+To install: `pip install bicamrl[vector]`
+
+### ChromaDB Backend
+Purpose-built for embeddings:
+```json
+{
+  "vector_store": {
+    "backend": "chromadb",
+    "config": {
+      "collection_name": "bicamrl",  // Optional: custom collection name
+      "distance_function": "cosine"  // Optional: distance function
+    }
+  }
+}
+```
+
+To install: `pip install bicamrl[vector]`
+
+## Rate Limiting
+
+Configure rate limiting to prevent abuse and ensure fair usage:
+
+```json
+{
+  "rate_limiting": {
+    "requests_per_minute": 60,      // Max requests per minute per client
+    "burst_size": 10,               // Max burst requests allowed
+    "window_seconds": 60            // Time window for rate limiting
+  }
+}
+```
+
+### Advanced Rate Limiting
+
+For different rate limits based on tool usage:
+
+```json
+{
+  "rate_limiting": {
+    "requests_per_minute": 60,
+    "burst_size": 10,
+    "window_seconds": 60,
+    "tool_costs": {                 // Optional: Custom costs per tool
+      "start_interaction": 1.0,
+      "complete_interaction": 2.0,
+      "detect_pattern": 1.5,
+      "search_memory": 3.0,
+      "consolidate_memories": 5.0
+    }
+  }
+}
+```
+
 ## Security Settings
 
 ```json

@@ -174,7 +174,112 @@ Gets recommendations from the Sleep.
 
 ## MCP Resources
 
-### @bicamrl/patterns
+### Health Check Resources
+
+#### @bicamrl/health/status
+
+Comprehensive health status of all server components.
+
+**Format:** JSON object
+
+**Example:**
+```json
+{
+  "status": "healthy",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "uptime_seconds": 3600.5,
+  "check_duration_ms": 15.2,
+  "components": {
+    "memory": {
+      "status": "healthy",
+      "latency_ms": 2.3,
+      "total_interactions": 1234,
+      "total_patterns": 45
+    },
+    "storage": {
+      "status": "healthy",
+      "sqlite": {
+        "status": "healthy",
+        "exists": true,
+        "size_mb": 12.5
+      },
+      "vector_store": {
+        "status": "healthy",
+        "backend": "LanceDBVectorStore",
+        "has_embeddings": true
+      }
+    },
+    "sleep_layer": {
+      "status": "healthy",
+      "is_running": true,
+      "queue_size": 3,
+      "insights_cached": 12
+    }
+  },
+  "version": "1.0.0"
+}
+```
+
+#### @bicamrl/health/ready
+
+Readiness check - indicates if server can handle requests.
+
+**Format:** JSON object
+
+**Example:**
+```json
+{
+  "ready": true,
+  "timestamp": "2024-01-15T10:30:00Z",
+  "components": {
+    "memory": true,
+    "pattern_detector": true,
+    "feedback_processor": true,
+    "interaction_logger": true
+  }
+}
+```
+
+#### @bicamrl/health/live
+
+Simple liveness check - indicates server is running.
+
+**Format:** JSON object
+
+**Example:**
+```json
+{
+  "alive": true,
+  "timestamp": "2024-01-15T10:30:00Z",
+  "server": "bicamrl",
+  "version": "1.0.0"
+}
+```
+
+#### @bicamrl/health/rate-limits
+
+Current rate limiting metrics and configuration.
+
+**Format:** JSON object
+
+**Example:**
+```json
+{
+  "total_requests": 1234,
+  "rejected_requests": 12,
+  "rejection_rate": 0.0097,
+  "active_clients": 5,
+  "config": {
+    "requests_per_minute": 60,
+    "burst_size": 10,
+    "window_seconds": 60
+  }
+}
+```
+
+### Pattern Resources
+
+#### @bicamrl/patterns
 
 All learned patterns from interactions.
 

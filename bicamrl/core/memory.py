@@ -16,13 +16,15 @@ from ..utils.log_utils import (
     create_interaction_logger
 )
 from .memory_consolidator import MemoryConsolidator
+from .pattern_detector import PatternDetector
+from .llm_service import LLMService
 
 logger = get_logger("memory")
 
 class Memory:
     """Core memory system with hierarchical storage."""
     
-    def __init__(self, db_path: str, llm_embeddings=None):
+    def __init__(self, db_path: str, llm_service: Optional[LLMService] = None, llm_embeddings=None, vector_backend: str = "basic"):
         start_time = time.time()
         self.logger = logger
         
@@ -34,13 +36,25 @@ class Memory:
                 f"Initializing Memory system",
                 extra={
                     'db_path': str(self.db_path),
-                    'has_embeddings': llm_embeddings is not None
+                    'has_llm_service': llm_service is not None,
+                    'has_embeddings': llm_embeddings is not None,
+                    'vector_backend': vector_backend
                 }
             )
             
             # Create log directory
             log_path = self.db_path.parent / "logs"
             log_path.mkdir(exist_ok=True)
+            
+            # Initialize LLM service (create default if not provided)
+            if llm_service is None:
+                llm_config = {
+                    "default_provider": "openai",
+                    "llm_providers": {}
+                }
+                self.llm_service = LLMService(llm_config)
+            else:
+                self.llm_service = llm_service
             
             # Initialize storage with timing
             store_start = time.time()
@@ -53,14 +67,25 @@ class Memory:
             # Initialize hybrid store if embeddings are provided
             if llm_embeddings:
                 hybrid_start = time.time()
-                self.hybrid_store = HybridStore(self.db_path / "hybrid", llm_embeddings)
+                self.hybrid_store = HybridStore(
+                    self.db_path / "hybrid", 
+                    llm_embeddings,
+                    vector_backend=vector_backend
+                )
                 logger.debug(
                     "Hybrid store initialized",
-                    extra={'duration_ms': (time.time() - hybrid_start) * 1000}
+                    extra={
+                        'duration_ms': (time.time() - hybrid_start) * 1000,
+                        'vector_backend': vector_backend
+                    }
                 )
                 logger.info(
                     "Memory system initialized with hybrid storage",
-                    extra={'storage_type': 'hybrid', 'path': str(self.db_path)}
+                    extra={
+                        'storage_type': 'hybrid', 
+                        'path': str(self.db_path),
+                        'vector_backend': vector_backend
+                    }
                 )
             else:
                 self.hybrid_store = None
@@ -70,8 +95,8 @@ class Memory:
                 )
             
             self.session_id = datetime.now().isoformat()
-            self.llm_provider = None
-            self.consolidator = MemoryConsolidator(self)
+            self.consolidator = MemoryConsolidator(self, self.llm_service)
+            self.pattern_detector = PatternDetector(self, self.llm_service)
             
             init_time = (time.time() - start_time) * 1000
             logger.info(
@@ -168,7 +193,7 @@ class Memory:
         start_time = time.time()
         
         async with async_log_context(logger, "fetch_recent_interactions", limit=limit):
-            interactions = await self.store.get_recent_interactions(limit)
+            interactions = await self.store.get_complete_interactions(limit=limit)
         
         logger.debug(
             f"Processing {len(interactions)} recent interactions",
@@ -180,13 +205,15 @@ class Memory:
         recent_actions = []
         
         for interaction in interactions:
-            if interaction.get("file_path"):
-                recent_files.append(interaction["file_path"])
-            recent_actions.append({
-                "action": interaction["action"],
-                "timestamp": interaction["timestamp"],
-                "file": interaction.get("file_path")
-            })
+            # Extract files and actions from the actions_taken field
+            for action in interaction.get('actions_taken', []):
+                if action.get('target') and '/' in str(action['target']):
+                    recent_files.append(action['target'])
+                recent_actions.append({
+                    "action": action.get('action_type', 'unknown'),
+                    "timestamp": interaction['timestamp'],
+                    "file": action.get('target')
+                })
         
         # Count file frequency
         file_counts = {}
@@ -218,27 +245,22 @@ class Memory:
     
     async def get_relevant_context(self, task_description: str, 
                                  file_context: List[str]) -> Dict[str, Any]:
-        """Get context relevant to a specific task."""
+        """Get context relevant to a specific task using LLM understanding."""
         # Search for similar interactions
         similar = await self.search(task_description)
         
-        # Get patterns that might apply
-        patterns = await self.get_all_patterns()
-        relevant_patterns = []
-        
-        # Simple keyword matching for now
-        keywords = task_description.lower().split()
-        for pattern in patterns:
-            pattern_text = f"{pattern.get('name', '')} {pattern.get('description', '')}".lower()
-            if any(kw in pattern_text for kw in keywords):
-                relevant_patterns.append(pattern)
+        # Use LLM-based pattern detector to find relevant patterns
+        relevant_patterns = await self.pattern_detector.find_similar_patterns(
+            task_description, 
+            limit=5
+        )
         
         # Get preferences that might apply
         all_prefs = await self.get_preferences()
         
         return {
             "task": task_description,
-            "relevant_patterns": relevant_patterns[:5],
+            "relevant_patterns": relevant_patterns,
             "similar_past_work": similar[:5],
             "applicable_preferences": all_prefs,
             "suggested_files": file_context
@@ -262,15 +284,15 @@ class Memory:
                 })
         
         # Search recent interactions
-        interactions = await self.store.get_recent_interactions(100)
+        interactions = await self.store.search_interactions_by_query(query, limit=100)
         for interaction in interactions:
-            if interaction.get('file_path') and query_lower in interaction['file_path'].lower():
-                results.append({
-                    "type": "file_access",
-                    "name": f"File: {interaction['file_path']}",
-                    "description": f"Action: {interaction['action']}",
-                    "timestamp": interaction['timestamp']
-                })
+            results.append({
+                "type": "interaction",
+                "name": f"Query: {interaction['user_query'][:50]}...",
+                "description": f"Session: {interaction['session_id']}",
+                "timestamp": interaction['timestamp'],
+                "interaction_id": interaction['interaction_id']
+            })
         
         # Search preferences
         preferences = await self.store.get_preferences()
@@ -288,25 +310,25 @@ class Memory:
     
     async def get_stats(self) -> Dict[str, Any]:
         """Get memory system statistics."""
-        interactions = await self.store.get_recent_interactions(1000)
+        # Get complete interactions
+        complete_interactions = await self.store.get_complete_interactions(limit=1000)
         patterns = await self.store.get_patterns()
         feedback = await self.store.get_feedback()
         
-        # Calculate top files
+        # Calculate top files from complete interactions
         file_counts = {}
-        for interaction in interactions:
-            if interaction.get('file_path'):
-                f = interaction['file_path']
-                file_counts[f] = file_counts.get(f, 0) + 1
-        
-        top_files = sorted(file_counts.keys(), 
-                          key=lambda x: file_counts[x], 
-                          reverse=True)[:10]
-        
-        # Count active sessions (last 24 hours)
         recent_sessions = set()
         cutoff = datetime.now().timestamp() - 86400  # 24 hours
-        for interaction in interactions:
+        
+        # Process complete interactions
+        for interaction in complete_interactions:
+            # Count files from actions
+            for action in interaction.get('actions_taken', []):
+                if action.get('target') and '/' in str(action['target']):
+                    f = action['target']
+                    file_counts[f] = file_counts.get(f, 0) + 1
+            
+            # Count recent sessions
             try:
                 ts = datetime.fromisoformat(interaction['timestamp']).timestamp()
                 if ts > cutoff:
@@ -314,8 +336,12 @@ class Memory:
             except:
                 pass
         
+        top_files = sorted(file_counts.keys(), 
+                          key=lambda x: file_counts[x], 
+                          reverse=True)[:10]
+        
         return {
-            "total_interactions": len(interactions),
+            "total_interactions": len(complete_interactions),
             "total_patterns": len(patterns),
             "total_feedback": len(feedback),
             "active_sessions": len(recent_sessions),
@@ -412,3 +438,34 @@ class Memory:
         if not self.hybrid_store:
             return []
         return await self.hybrid_store.cluster_similar_queries(min_cluster_size, similarity_threshold)
+    
+    async def get_memory_stats(self) -> Dict[str, int]:
+        """Get memory statistics showing counts by memory type."""
+        all_patterns = await self.store.get_patterns()
+        
+        # Count patterns by memory type
+        memory_counts = {
+            "active": 0,
+            "working": 0,
+            "episodic": 0,
+            "semantic": 0
+        }
+        
+        # Count based on pattern_type field
+        for pattern in all_patterns:
+            pattern_type = pattern.get('pattern_type', '')
+            if 'consolidated_working' in pattern_type:
+                memory_counts['working'] += 1
+            elif 'consolidated_episodic' in pattern_type:
+                memory_counts['episodic'] += 1
+            elif 'consolidated_semantic' in pattern_type:
+                memory_counts['semantic'] += 1
+            else:
+                # Non-consolidated patterns are considered active
+                memory_counts['active'] += 1
+        
+        # Also count complete interactions as active memories
+        interactions = await self.store.get_complete_interactions(limit=1000)
+        memory_counts['active'] += len(interactions)
+        
+        return memory_counts
