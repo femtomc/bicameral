@@ -14,6 +14,7 @@ from ..tui.permission_http_server import PermissionHTTPServer
 from ..tui.streaming_handler import StreamingUpdate
 from ..tui.wake_agent import WakeAgent
 from ..utils.logging_config import get_logger
+from ..utils.token_counter import TokenCounter
 
 # Import the Rust extension module (will be available after building)
 try:
@@ -74,12 +75,21 @@ class BicamrlRustTUI:
         # Queue for streaming updates to avoid direct calls
         self._streaming_queue = queue.Queue()
 
+        # Queue for stats updates - Rust will poll this
+        self._stats_update_queue = queue.Queue()
+
         # Permission handling
         self._permission_response_queue = queue.Queue()  # Use regular queue, not asyncio
         self._pending_permission_event = None
         self._permission_manager = None
         self._permission_http_server = None
         self._pending_permission_requests = {}  # Map request_id to tool_name
+
+        # Token tracking
+        self._token_counter = TokenCounter()
+
+        # Flag to stop background tasks
+        self._running = True
 
     async def initialize(self):
         """Initialize the memory and sleep systems."""
@@ -121,6 +131,9 @@ class BicamrlRustTUI:
             # Add welcome message
             self.tui.add_message("Welcome to Bicamrl! Type a message and press Enter.", "assistant")
 
+            # Start periodic stats calculation (but NOT direct TUI updates)
+            asyncio.create_task(self._periodic_stats_calculator())
+
         except Exception as e:
             logger.error(f"Failed to initialize systems: {e}")
             raise
@@ -141,9 +154,23 @@ class BicamrlRustTUI:
                 success_count = sum(1 for i in recent if i.get("success", False))
                 stats.success_rate = success_count / len(recent)
                 stats.active_memories = len(recent)
-                stats.tokens_used = sum(i.get("tokens_used", 0) for i in recent)
+
+            # Use session tokens for current display
+            stats.tokens_used = self._token_counter.get_session_tokens()
 
         return stats
+
+    async def _periodic_stats_calculator(self):
+        """Periodically calculate stats and queue them for Rust to poll."""
+        while self._running:
+            try:
+                await asyncio.sleep(0.5)  # Calculate every 500ms
+                stats = await self._get_current_stats()
+                # Queue the stats update for Rust to poll
+                self._stats_update_queue.put({"type": "stats_update", "stats": stats})
+            except Exception as e:
+                logger.error(f"Error calculating stats: {e}")
+                await asyncio.sleep(5)  # Back off on error
 
     def _on_wake_message(self, response: str, metadata: Dict[str, Any]):
         """Handle Wake agent messages."""
@@ -155,16 +182,47 @@ class BicamrlRustTUI:
 
     def _on_streaming_update(self, update: StreamingUpdate):
         """Handle streaming updates from Wake agent."""
-        # Queue the update instead of calling Rust directly
-        # This avoids borrowing issues by letting the main thread handle it
-        self._streaming_queue.put(
-            {
-                "type": update.type.value,
-                "content": update.content,
-                "metadata": update.metadata,
-                "is_complete": update.is_complete,
-            }
-        )
+        # Check for token updates
+        if update.type.value == "system" and update.content.startswith("__UPDATE_TOKENS__:"):
+            # Extract token count
+            token_str = update.content.split(":", 1)[1]
+            if token_str.isdigit():
+                tokens = int(token_str)
+                # Check if this is the final accurate count
+                if update.metadata.get("final", False):
+                    # Update session tokens with the accurate count
+                    self._token_counter.update_session_tokens(tokens)
+                    # Queue a stats update for Rust to poll
+                    if self.async_bridge:
+
+                        async def queue_stats():
+                            stats = await self._get_current_stats()
+                            self._stats_update_queue.put({"type": "stats_update", "stats": stats})
+
+                        self.async_bridge.run_async_no_wait(queue_stats())
+                    logger.info(
+                        f"Session tokens updated: {self._token_counter.get_session_tokens()}"
+                    )
+                else:
+                    # Just update the current message tokens for display
+                    self._token_counter.update_current_tokens(tokens)
+
+        # Queue the update for Rust processing
+        queued_update = {
+            "type": update.type.value,
+            "content": update.content,
+            "metadata": update.metadata,
+            "is_complete": update.is_complete,
+        }
+        # Log important updates
+        if (
+            update.content in ["__CLOSE_POPUP__", "__START_THINKING__", "__STOP_THINKING__"]
+            or "tool" in update.type.value.lower()
+        ):
+            logger.info(
+                f"[QUEUE] Queuing update: type={update.type.value}, content={update.content[:50]}"
+            )
+        self._streaming_queue.put(queued_update)
 
     def _on_chat_message(self, message: str) -> str:
         """Callback from Rust TUI when user sends a message.
@@ -179,12 +237,19 @@ class BicamrlRustTUI:
             # Check if there are queued streaming updates
             try:
                 update = self._streaming_queue.get_nowait()
+                # Log what we're sending back
+                if (
+                    update.get("content", "")
+                    in ["__CLOSE_POPUP__", "__START_THINKING__", "__STOP_THINKING__"]
+                    or "tool" in update.get("type", "").lower()
+                ):
+                    logger.info(
+                        f"[POLL] Returning to Rust: type={update.get('type')}, content={update.get('content', '')[:50]}"
+                    )
                 # Handle special thinking state changes
                 if update.get("type") == "__START_THINKING__":
-                    logger.info("Returning START_THINKING to Rust")
                     return "__START_THINKING__"
                 elif update.get("type") == "__STOP_THINKING__":
-                    logger.info("Returning STOP_THINKING to Rust")
                     return "__STOP_THINKING__"
                 else:
                     # Return as JSON so Rust can parse it
@@ -192,6 +257,23 @@ class BicamrlRustTUI:
                     return f"__STREAMING__:{json.dumps(update, ensure_ascii=False)}"
             except queue.Empty:
                 return "__NO_STREAMING__"
+
+        # Handle polling for stats updates
+        if message == "__POLL_STATS__":
+            try:
+                stats_update = self._stats_update_queue.get_nowait()
+                stats = stats_update["stats"]
+                stats_dict = {
+                    "total_interactions": stats.total_interactions,
+                    "total_patterns": stats.total_patterns,
+                    "success_rate": stats.success_rate,
+                    "active_memories": stats.active_memories,
+                    "tokens_used": stats.tokens_used,
+                    "active_sessions": stats.active_sessions,
+                }
+                return f"__STATS__:{json.dumps(stats_dict)}"
+            except queue.Empty:
+                return "__NO_STATS__"
 
         # Handle special commands
         if message == "__INTERRUPT__":
@@ -333,6 +415,9 @@ class BicamrlRustTUI:
             # Just run the TUI - handle everything in callbacks
             self.tui.run()
         finally:
+            # Stop background tasks
+            self._running = False
+
             # Clean up the async bridge
             if self.async_bridge:
                 self.async_bridge.stop()

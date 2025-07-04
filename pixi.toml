@@ -66,8 +66,6 @@ ruff = ">=0.1.0"
 pyright = ">=1.1.0"
 ipython = ">=8.0.0"
 pre-commit = ">=3.0.0"
-# pytest-watch = ">=4.2.0"  # Not available in conda-forge
-# tree = "*"  # Platform-specific, not available on all systems
 
 
 [environments]

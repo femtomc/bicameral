@@ -48,7 +48,9 @@ class StreamingHandler:
                 # Handle different message types
                 if hasattr(message, "__class__"):
                     message_type = message.__class__.__name__
-                    # Don't log every message type - too noisy
+                    # Log important message types
+                    if message_type in ["ToolResult", "ToolUseBlock", "ToolResultBlock"]:
+                        logger.info(f"[STREAMING] Received message type: {message_type}")
 
                     if message_type == "AssistantMessage":
                         await self._handle_assistant_message(message)
@@ -62,9 +64,21 @@ class StreamingHandler:
                     elif message_type == "ToolPermissionRequest":
                         # Handle tool permission requests
                         await self._handle_tool_permission_request(message)
+                    elif message_type == "ToolResult":
+                        # Handle tool results at the top level
+                        logger.info(f"Top-level ToolResult message received")
+                        # Send close popup event
+                        if self.on_update:
+                            self.on_update(
+                                StreamingUpdate(
+                                    type=StreamingMessageType.SYSTEM,
+                                    content="__CLOSE_POPUP__",
+                                    metadata={"close_popup": True},
+                                )
+                            )
                     else:
                         # Unknown message type - only log if it's really unexpected
-                        if message_type not in ["TextContent", "ToolResult"]:
+                        if message_type not in ["TextContent"]:
                             logger.debug(f"Unhandled message type: {message_type}")
 
         except asyncio.CancelledError:
@@ -90,8 +104,10 @@ class StreamingHandler:
                     # Regular text content
                     self.current_response.append(block.text)
 
-                    # Approximate token count (roughly 4 chars per token)
-                    self.approximate_tokens += len(block.text) // 4
+                    # Better token estimation based on character count
+                    # Claude models average ~3.5 chars per token
+                    token_increment = max(1, int(len(block.text) / 3.5))
+                    self.approximate_tokens += token_increment
 
                     # Send token update
                     if self.on_update:
@@ -117,7 +133,7 @@ class StreamingHandler:
                     self.tool_uses.append(
                         {"id": block.id, "name": block.name, "input": block.input}
                     )
-                    logger.info(f"Tool use detected: {block.name}")
+                    logger.info(f"Tool use detected: {block.name} with id: {block.id}")
 
                     # First show that we're using the tool
                     if self.on_update:
@@ -135,6 +151,9 @@ class StreamingHandler:
 
                 elif block_type == "ToolResultBlock":
                     # Tool result - close the tool popup
+                    logger.info(
+                        f"Tool result received for id: {getattr(block, 'tool_use_id', 'unknown')}"
+                    )
                     if self.on_update:
                         content = (
                             block.content if isinstance(block.content, str) else str(block.content)
@@ -145,12 +164,13 @@ class StreamingHandler:
                                 type=StreamingMessageType.TOOL_RESULT,
                                 content=content[:100] + "..." if len(content) > 100 else content,
                                 metadata={
-                                    "tool_use_id": block.tool_use_id,
-                                    "is_error": block.is_error or False,
+                                    "tool_use_id": getattr(block, "tool_use_id", None),
+                                    "is_error": getattr(block, "is_error", False),
                                 },
                             )
                         )
                         # Then send a close popup event
+                        logger.info("Sending __CLOSE_POPUP__ to close tool popup")
                         self.on_update(
                             StreamingUpdate(
                                 type=StreamingMessageType.SYSTEM,

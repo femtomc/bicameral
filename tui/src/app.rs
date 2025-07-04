@@ -1,5 +1,5 @@
 use crate::spinner::SpinnerState;
-use crate::{MessageType, Stats};
+use crate::{debug_log, MessageType, Stats};
 use std::collections::VecDeque;
 
 #[derive(Debug, Clone)]
@@ -22,6 +22,8 @@ pub struct App {
     pub spinner_state: SpinnerState,
     pub current_tokens: usize,
     pub popup: Option<Popup>,
+    pub popup_shown_at: Option<std::time::Instant>,
+    pub popup_events: (usize, usize), // (show_count, close_count)
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +67,8 @@ impl App {
             spinner_state: SpinnerState::new(),
             current_tokens: 0,
             popup: None,
+            popup_shown_at: None,
+            popup_events: (0, 0),
         }
     }
 
@@ -155,7 +159,7 @@ impl App {
 
     pub fn stop_thinking(&mut self) {
         self.is_thinking = false;
-        self.current_tokens = 0;
+        // Don't clear current_tokens here - we want to keep the count
     }
 
     pub fn update_spinner(&mut self) {
@@ -165,30 +169,84 @@ impl App {
     }
 
     pub fn show_popup(&mut self, popup: Popup) {
+        let popup_type = format!("{:?}", popup.popup_type);
         self.popup = Some(popup);
+        self.popup_shown_at = Some(std::time::Instant::now());
+        self.popup_events.0 += 1;
+        debug_log!(
+            "[APP] Popup shown: {}. Total shows: {}, closes: {}",
+            popup_type,
+            self.popup_events.0,
+            self.popup_events.1
+        );
     }
 
     pub fn close_popup(&mut self) {
+        // Just close the popup - no timing checks
+        let was_open = self.popup.is_some();
         self.popup = None;
+        self.popup_shown_at = None;
+        self.popup_events.1 += 1;
+        debug_log!(
+            "[APP] Popup close called (was_open: {}). Total shows: {}, closes: {}",
+            was_open,
+            self.popup_events.0,
+            self.popup_events.1
+        );
     }
 
     pub fn show_tool_permission(&mut self, tool_name: String, tool_input: String) {
         // Split long input into multiple lines if needed
-        let mut content = vec![
-            format!("Tool: {}", tool_name),
-            "".to_string(),
-            "Input:".to_string(),
-        ];
+        let mut content = vec![format!("Tool: {}", tool_name), "".to_string()];
 
-        // Split tool input by lines and limit line length
-        for line in tool_input.lines() {
-            if line.len() > 50 {
-                // Wrap long lines
-                for chunk in line.chars().collect::<Vec<_>>().chunks(50) {
-                    content.push(chunk.iter().collect());
+        // Try to parse the JSON and format it nicely
+        if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&tool_input) {
+            // Format each field of the JSON
+            if let Some(obj) = json_value.as_object() {
+                for (key, value) in obj {
+                    // Format the key
+                    content.push(format!("{}:", key.to_uppercase()));
+
+                    // Format the value
+                    let value_str = match value {
+                        serde_json::Value::String(s) => s.clone(),
+                        _ => value.to_string(),
+                    };
+
+                    // Wrap long lines, indented
+                    if value_str.len() > 60 {
+                        for chunk in value_str.chars().collect::<Vec<_>>().chunks(60) {
+                            content.push(format!("  {}", chunk.iter().collect::<String>()));
+                        }
+                    } else {
+                        content.push(format!("  {}", value_str));
+                    }
+                    content.push("".to_string());
                 }
             } else {
-                content.push(line.to_string());
+                // Not an object, just display as-is but wrapped
+                content.push("Input:".to_string());
+                for line in tool_input.lines() {
+                    if line.len() > 50 {
+                        for chunk in line.chars().collect::<Vec<_>>().chunks(50) {
+                            content.push(chunk.iter().collect());
+                        }
+                    } else {
+                        content.push(line.to_string());
+                    }
+                }
+            }
+        } else {
+            // Not JSON, display as plain text
+            content.push("Input:".to_string());
+            for line in tool_input.lines() {
+                if line.len() > 50 {
+                    for chunk in line.chars().collect::<Vec<_>>().chunks(50) {
+                        content.push(chunk.iter().collect());
+                    }
+                } else {
+                    content.push(line.to_string());
+                }
             }
         }
 

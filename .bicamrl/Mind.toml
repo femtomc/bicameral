@@ -10,12 +10,14 @@ enabled = true
 temperature = 0.7
 max_tokens = 2048
 # Permission configuration - use custom tool
-permission_mode = "tool"
-permission_prompt_tool = "approval_prompt"
+permission_mode = "default"
+permission_prompt_tool = "mcp__bicamrl-permissions__approval_prompt"
 allowed_tools = []  # Empty list means all tools require permission
 # MCP server configuration for the permission tool
 [llm_providers.claude_code.mcp_servers.bicamrl-permissions]
-command = ["pixi", "run", "python", "-m", "bicamrl.tui.permission_server"]
+type = "stdio"
+command = "pixi"
+args = ["run", "python", "-m", "bicamrl.tui.permission_server"]
 
 [sleep]
 enabled = true
@@ -33,8 +35,8 @@ enabled = true
 temperature = 0.7
 max_tokens = 1000
 # Permission configuration - use custom tool
-permission_mode = "tool"
-permission_prompt_tool = "approval_prompt"
+permission_mode = "default"
+permission_prompt_tool = "mcp__bicamrl-permissions__approval_prompt"
 allowed_tools = []  # Empty list means all tools require permission
 # MCP server configuration for the permission tool
 [sleep.llm_providers.claude_code.mcp_servers.bicamrl-permissions]

@@ -340,7 +340,17 @@ class ClaudeCodeProvider(BaseLLMProvider):
         self.model = config.get("model", "claude-opus-4-20250514")
 
         # Permission mode configuration
+        logger.debug(f"ClaudeCodeProvider config: {config}")
         self.permission_mode = config.get("permission_mode", "default")
+
+        # Validate permission_mode
+        valid_modes = ["default", "acceptEdits", "bypassPermissions"]
+        if self.permission_mode not in valid_modes:
+            logger.error(
+                f"Invalid permission_mode: {self.permission_mode}. Must be one of {valid_modes}"
+            )
+            logger.error(f"Falling back to 'default' mode")
+            self.permission_mode = "default"
         self.permission_prompt_tool = config.get("permission_prompt_tool", None)
         self.mcp_servers = config.get("mcp_servers", {})
         self.mcp_tools = config.get("mcp_tools", [])
@@ -402,6 +412,18 @@ class ClaudeCodeProvider(BaseLLMProvider):
             # Get allowed_tools from config, default to empty list
             allowed_tools = self.config.get("allowed_tools", [])
 
+            # Debug logging
+            logger.info(f"Creating ClaudeCodeOptions with:")
+            logger.info(
+                f"  permission_mode='{self.permission_mode}' (type: {type(self.permission_mode)})"
+            )
+            logger.info(f"  permission_prompt_tool_name='{self.permission_prompt_tool}'")
+            logger.info(f"  allowed_tools={allowed_tools}")
+            logger.info(
+                f"  mcp_servers={list(self.mcp_servers.keys()) if self.mcp_servers else []}"
+            )
+            logger.info(f"  mcp_tools={self.mcp_tools}")
+
             options = ClaudeCodeOptions(
                 max_turns=self.max_turns,
                 allowed_tools=allowed_tools,  # Use configured allowed_tools
@@ -411,6 +433,13 @@ class ClaudeCodeProvider(BaseLLMProvider):
                 mcp_tools=self.mcp_tools,
                 system_prompt=system,  # Use system prompt properly
                 model=self.model,  # Use configured model
+            )
+
+            # Log the options object to debug
+            logger.info(f"ClaudeCodeOptions object created:")
+            logger.info(f"  options.permission_mode = {options.permission_mode}")
+            logger.info(
+                f"  options.permission_prompt_tool_name = {options.permission_prompt_tool_name}"
             )
 
             response_parts = []
@@ -441,6 +470,18 @@ class ClaudeCodeProvider(BaseLLMProvider):
 
             # Get allowed_tools from config, default to empty list
             allowed_tools = self.config.get("allowed_tools", [])
+
+            # Debug logging
+            logger.info(f"Creating ClaudeCodeOptions with:")
+            logger.info(
+                f"  permission_mode='{self.permission_mode}' (type: {type(self.permission_mode)})"
+            )
+            logger.info(f"  permission_prompt_tool_name='{self.permission_prompt_tool}'")
+            logger.info(f"  allowed_tools={allowed_tools}")
+            logger.info(
+                f"  mcp_servers={list(self.mcp_servers.keys()) if self.mcp_servers else []}"
+            )
+            logger.info(f"  mcp_tools={self.mcp_tools}")
 
             options = ClaudeCodeOptions(
                 max_turns=self.max_turns,
@@ -480,6 +521,18 @@ class ClaudeCodeProvider(BaseLLMProvider):
 
             # Get allowed_tools from config, default to empty list
             allowed_tools = self.config.get("allowed_tools", [])
+
+            # Debug logging
+            logger.info(f"Creating ClaudeCodeOptions with:")
+            logger.info(
+                f"  permission_mode='{self.permission_mode}' (type: {type(self.permission_mode)})"
+            )
+            logger.info(f"  permission_prompt_tool_name='{self.permission_prompt_tool}'")
+            logger.info(f"  allowed_tools={allowed_tools}")
+            logger.info(
+                f"  mcp_servers={list(self.mcp_servers.keys()) if self.mcp_servers else []}"
+            )
+            logger.info(f"  mcp_tools={self.mcp_tools}")
 
             options = ClaudeCodeOptions(
                 max_turns=self.max_turns,
@@ -559,7 +612,9 @@ def create_llm_providers(config: Dict[str, Any]) -> Dict[str, BaseLLMProvider]:
             )
         elif provider_type == "claude_code" or name == "claude_code":
             try:
-                providers[name] = ClaudeCodeProvider(config=provider_config)
+                providers[name] = ClaudeCodeProvider(
+                    api_key=provider_config.get("api_key"), config=provider_config
+                )
                 logger.info("Claude Code provider initialized successfully")
             except (ImportError, RuntimeError) as e:
                 logger.warning(f"Failed to initialize Claude Code provider: {e}")

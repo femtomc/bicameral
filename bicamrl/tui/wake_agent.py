@@ -140,7 +140,7 @@ class WakeAgent:
             "metadata": {"type": "chat_response", "original_message": message},
             "success": True,
             "feedback_type": "none",
-            "tokens_used": len(response.split()),  # Simple token estimate
+            "tokens_used": 0,  # Will be updated by streaming handler with accurate count
         }
         await self.memory.store_interaction(assistant_interaction)
 

@@ -13,7 +13,9 @@ use std::{
 use tokio::sync::mpsc;
 
 mod app;
+mod app_core;
 mod code_highlighter;
+mod debug_logger;
 mod markdown;
 mod spinner;
 mod theme;
@@ -21,11 +23,13 @@ mod ui;
 mod unicode_utils;
 mod widgets;
 
-use app::{App, PopupType};
+use app::PopupType;
+use app_core::AppCore;
+use debug_logger::init_debug_log;
 
 #[pyclass]
 pub struct BicamrlTUI {
-    app: Arc<Mutex<App>>,
+    core: AppCore,
     tx: Option<mpsc::Sender<AppEvent>>,
     handle: Option<std::thread::JoinHandle<()>>,
     callback: Option<PyObject>,
@@ -94,10 +98,8 @@ impl Stats {
 impl BicamrlTUI {
     #[new]
     fn new() -> PyResult<Self> {
-        let app = Arc::new(Mutex::new(App::new()));
-
         Ok(Self {
-            app,
+            core: AppCore::new(),
             tx: None,
             handle: None,
             callback: None,
@@ -112,7 +114,7 @@ impl BicamrlTUI {
         let (tx, mut rx) = mpsc::channel(1000); // Increase buffer size for streaming
         self.tx = Some(tx.clone());
 
-        let app = self.app.clone();
+        let core = self.core.clone();
         let callback = self.callback.clone();
 
         // We need to handle the callback in a way that's safe across threads
@@ -135,147 +137,35 @@ impl BicamrlTUI {
                                         if let Some(json_str) =
                                             response_str.strip_prefix("__STREAMING__:")
                                         {
-                                            // Use serde_json for proper JSON parsing with Unicode support
-                                            if let Ok(update) =
-                                                serde_json::from_str::<serde_json::Value>(json_str)
+                                            // Use AppCore to parse the update
+                                            if let Some(event) =
+                                                AppCore::parse_streaming_update(json_str)
                                             {
-                                                let update_type = update
-                                                    .get("type")
-                                                    .and_then(|v| v.as_str())
-                                                    .unwrap_or("");
-                                                let content = update
-                                                    .get("content")
-                                                    .and_then(|v| v.as_str())
-                                                    .unwrap_or("")
-                                                    .to_string();
-                                                let is_complete = update
-                                                    .get("is_complete")
-                                                    .and_then(|v| v.as_bool())
-                                                    .unwrap_or(false);
-
-                                                // Handle based on type
-                                                match update_type {
-                                                    "text" => {
-                                                        if is_complete && !content.is_empty() {
-                                                            // This is a complete message from non-streaming provider
-                                                            let _ = tx_clone.blocking_send(
-                                                                AppEvent::AddMessage(
-                                                                    content,
-                                                                    MessageType::Assistant,
-                                                                ),
-                                                            );
-                                                        } else if !content.is_empty() {
-                                                            // This is streaming text
-                                                            let _ = tx_clone.blocking_send(
-                                                                AppEvent::AddStreamingText(content),
-                                                            );
-                                                        }
-                                                    }
-                                                    "system" => {
-                                                        // Check for special messages
-                                                        if content.starts_with("__UPDATE_TOKENS__:")
-                                                        {
-                                                            if let Some(token_str) = content
-                                                                .strip_prefix("__UPDATE_TOKENS__:")
-                                                            {
-                                                                if let Ok(tokens) =
-                                                                    token_str.parse::<usize>()
-                                                                {
-                                                                    let _ = tx_clone.blocking_send(
-                                                                        AppEvent::UpdateTokenCount(
-                                                                            tokens,
-                                                                        ),
-                                                                    );
-                                                                }
-                                                            }
-                                                        } else if content.starts_with(
-                                                            "__TOOL_PERMISSION_REQUEST__:",
-                                                        ) {
-                                                            // Parse tool permission request
-                                                            if let Some(perm_str) = content
-                                                                .strip_prefix(
-                                                                    "__TOOL_PERMISSION_REQUEST__:",
-                                                                )
-                                                            {
-                                                                let parts: Vec<&str> = perm_str
-                                                                    .splitn(2, ':')
-                                                                    .collect();
-                                                                if parts.len() >= 1 {
-                                                                    let tool_name =
-                                                                        parts[0].to_string();
-                                                                    let tool_input = if parts.len()
-                                                                        > 1
-                                                                    {
-                                                                        // Try to pretty-print JSON
-                                                                        if let Ok(parsed) =
-                                                                            serde_json::from_str::<
-                                                                                serde_json::Value,
-                                                                            >(
-                                                                                parts[1]
-                                                                            )
-                                                                        {
-                                                                            serde_json::to_string_pretty(&parsed).unwrap_or_else(|_| parts[1].to_string())
-                                                                        } else {
-                                                                            parts[1].to_string()
-                                                                        }
-                                                                    } else {
-                                                                        String::new()
-                                                                    };
-                                                                    let _ = tx_clone.blocking_send(AppEvent::ShowToolPermission(tool_name, tool_input));
-                                                                }
-                                                            }
-                                                        } else if content == "__CLOSE_POPUP__" {
-                                                            // Close any open popup (e.g., tool running popup)
-                                                            let _ = tx_clone.blocking_send(
-                                                                AppEvent::ClosePopup,
-                                                            );
-                                                        } else if !content.is_empty() {
-                                                            // Show other system messages as they contain important info like usage limits
-                                                            let _ = tx_clone.blocking_send(
-                                                                AppEvent::AddSystemMessage(content),
-                                                            );
-                                                        }
-                                                    }
-                                                    "usage" => {
-                                                        // Show usage information
-                                                        if !content.is_empty() {
-                                                            let _ = tx_clone.blocking_send(
-                                                                AppEvent::AddSystemMessage(content),
-                                                            );
-                                                        }
-                                                    }
-                                                    "tool_use" => {
-                                                        // Extract tool name from content
-                                                        if content.starts_with("Using tool: ") {
-                                                            if let Some(tool_name) =
-                                                                content.strip_prefix("Using tool: ")
-                                                            {
-                                                                let _ = tx_clone.blocking_send(
-                                                                    AppEvent::ShowToolUse(
-                                                                        tool_name.to_string(),
-                                                                    ),
-                                                                );
-                                                            }
-                                                        }
-                                                    }
-                                                    "tool_result" => {
-                                                        // Close the tool use popup when done
-                                                        let _ = tx_clone
-                                                            .blocking_send(AppEvent::ClosePopup);
-                                                    }
-                                                    _ => {
-                                                        // Default to streaming text
-                                                        if !content.is_empty() {
-                                                            let _ = tx_clone.blocking_send(
-                                                                AppEvent::AddStreamingText(content),
-                                                            );
-                                                        }
-                                                    }
+                                                debug_log!("[CALLBACK THREAD] Sending event to main loop: {:?}", event);
+                                                match tx_clone.blocking_send(event) {
+                                                    Ok(_) => debug_log!("[CALLBACK THREAD] Event sent successfully"),
+                                                    Err(e) => debug_log!("[CALLBACK THREAD] Failed to send event: {}", e),
                                                 }
+                                            } else {
+                                                debug_log!("[CALLBACK THREAD] AppCore returned None for JSON: {}", json_str);
                                             }
                                         }
                                     } else if response_str == "__NO_STREAMING__" {
                                         // No streaming updates available
+                                    } else if response_str.starts_with("__STATS__:") {
+                                        // Parse stats update
+                                        if let Some(json_str) =
+                                            response_str.strip_prefix("__STATS__:")
+                                        {
+                                            if let Some(stats) =
+                                                AppCore::parse_stats_update(json_str)
+                                            {
+                                                let _ = tx_clone
+                                                    .blocking_send(AppEvent::UpdateStats(stats));
+                                            }
+                                        }
+                                    } else if response_str == "__NO_STATS__" {
+                                        // No stats updates available
                                     } else if response_str == "__PROCESSING__" {
                                         // Message is being processed asynchronously
                                         // Response will come through streaming
@@ -310,8 +200,13 @@ impl BicamrlTUI {
         }
 
         py.allow_threads(|| {
+            let core = core.clone();
+            let app = core.get_app();
+
             let runtime = tokio::runtime::Runtime::new().unwrap();
             runtime.block_on(async move {
+                // Initialize debug logging
+                init_debug_log();
                 // Setup terminal
                 enable_raw_mode().unwrap();
                 let mut stdout = io::stdout();
@@ -325,18 +220,29 @@ impl BicamrlTUI {
                 // Main loop
                 let mut needs_redraw = true;
                 let mut last_spinner_update = std::time::Instant::now();
+                let mut last_stats_poll = std::time::Instant::now();
                 loop {
                     // Draw UI if needed
                     if needs_redraw {
                         let app_ref = app.lock().unwrap();
+                        let has_popup = app_ref.popup.is_some();
                         terminal.draw(|f| ui::draw(f, &*app_ref)).unwrap();
                         drop(app_ref);
+                        if has_popup {
+                            debug_log!("[MAIN LOOP] Drew frame with popup visible");
+                        }
                         needs_redraw = false;
                     }
 
                     // Poll for streaming updates from Python
                     // This avoids Python calling back into Rust directly
                     let _ = callback_tx.send("__POLL_STREAMING__".to_string());
+
+                    // Poll for stats updates periodically
+                    if last_stats_poll.elapsed() >= std::time::Duration::from_millis(500) {
+                        let _ = callback_tx.send("__POLL_STATS__".to_string());
+                        last_stats_poll = std::time::Instant::now();
+                    }
 
                     // Update spinner if thinking
                     {
@@ -584,42 +490,21 @@ impl BicamrlTUI {
 
                     // Process app events
                     if let Ok(event) = rx.try_recv() {
-                        match event {
+                        // Log important events
+                        match &event {
+                            AppEvent::ShowToolUse(tool) => {
+                                debug_log!("[MAIN LOOP] Received ShowToolUse event for: {}", tool);
+                            }
+                            AppEvent::ClosePopup => {
+                                debug_log!("[MAIN LOOP] Received ClosePopup event");
+                            }
+                            _ => {}
+                        }
+
+                        match &event {
                             AppEvent::Quit => break,
-                            AppEvent::UpdateStats(stats) => {
-                                let mut app = app.lock().unwrap();
-                                app.update_stats(stats);
-                                drop(app);
-                                needs_redraw = true;
-                            }
-                            AppEvent::AddMessage(msg, msg_type) => {
-                                let mut app = app.lock().unwrap();
-                                // Check if we're at the bottom before adding the message
-                                let was_at_bottom =
-                                    app.scroll_offset == 0 || app.scroll_offset >= 1000000;
-                                app.add_message(msg, msg_type);
-                                // Auto-scroll only if we were already at the bottom
-                                if was_at_bottom {
-                                    app.scroll_offset = 0; // Will be adjusted in UI
-                                }
-                                drop(app);
-                                needs_redraw = true;
-                            }
-                            AppEvent::AddStreamingText(text) => {
-                                let mut app = app.lock().unwrap();
-                                app.add_streaming_text(text);
-                                drop(app);
-                                needs_redraw = true;
-                            }
-                            AppEvent::AddSystemMessage(msg) => {
-                                // Show system messages - they contain important info
-                                let mut app = app.lock().unwrap();
-                                app.add_system_message(msg);
-                                drop(app);
-                                needs_redraw = true;
-                            }
                             AppEvent::SendChatMessage(msg) => {
-                                // Add user message and clear system buffer
+                                // Special handling for chat messages
                                 {
                                     let mut app = app.lock().unwrap();
                                     app.add_message(msg.clone(), MessageType::User);
@@ -627,56 +512,27 @@ impl BicamrlTUI {
                                 }
                                 needs_redraw = true;
                                 // Send to Python callback
-                                let _ = callback_tx.send(msg);
+                                let _ = callback_tx.send(msg.clone());
                             }
-                            AppEvent::Refresh => {
-                                needs_redraw = true;
+                            _ => {
+                                // Use AppCore to process all other events
+                                needs_redraw = core.process_event(event) || needs_redraw;
                             }
-                            AppEvent::StartThinking => {
-                                let mut app = app.lock().unwrap();
-                                app.start_thinking();
-                                drop(app);
-                                needs_redraw = true;
-                            }
-                            AppEvent::StopThinking => {
-                                let mut app = app.lock().unwrap();
-                                app.stop_thinking();
-                                drop(app);
-                                needs_redraw = true;
-                            }
-                            AppEvent::UpdateSpinner => {
-                                let mut app = app.lock().unwrap();
-                                app.update_spinner();
-                                drop(app);
-                                needs_redraw = true;
-                            }
-                            AppEvent::UpdateTokenCount(count) => {
-                                let mut app = app.lock().unwrap();
-                                app.current_tokens = count;
-                                drop(app);
-                                needs_redraw = true;
-                            }
-                            AppEvent::ShowToolPermission(tool_name, tool_input) => {
-                                let mut app = app.lock().unwrap();
-                                app.show_tool_permission(tool_name, tool_input);
-                                drop(app);
-                                needs_redraw = true;
-                            }
-                            AppEvent::ShowToolUse(tool_name) => {
-                                let mut app = app.lock().unwrap();
-                                app.show_tool_use(tool_name);
-                                drop(app);
-                                needs_redraw = true;
-                            }
-                            AppEvent::ClosePopup => {
-                                let mut app = app.lock().unwrap();
-                                app.close_popup();
-                                drop(app);
-                                needs_redraw = true;
-                            }
-                            _ => {}
                         }
                     }
+                }
+
+                // Log final state before exiting
+                {
+                    let app = app.lock().unwrap();
+                    debug_log!("=== TUI Exit Summary ===");
+                    debug_log!(
+                        "Popup events - shows: {}, closes: {}",
+                        app.popup_events.0,
+                        app.popup_events.1
+                    );
+                    debug_log!("Final popup state: {:?}", app.popup.is_some());
+                    debug_log!("Total messages: {}", app.messages.len());
                 }
 
                 // Restore terminal

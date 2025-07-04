@@ -286,12 +286,32 @@ fn draw_chat(f: &mut Frame, area: Rect, app: &App) {
         );
     f.render_widget(input, chunks[1]);
 
-    // Draw system status bar
-    let system_text = if app.system_buffer.is_empty() {
-        "Ready".to_string()
+    // Draw system status bar with stats
+    let popup_status = if app.popup.is_some() {
+        " | POPUP ACTIVE"
     } else {
-        // Show the most recent system message
-        app.system_buffer.back().cloned().unwrap_or_default()
+        ""
+    };
+
+    let system_text = if app.system_buffer.is_empty() {
+        // Show stats when no system messages
+        format!(
+            "Ready | Interactions: {} | Patterns: {} | Tokens: {} | Sessions: {} | Events: show={}/close={}{}",
+            app.stats.total_interactions,
+            app.stats.total_patterns,
+            app.stats.tokens_used,
+            app.stats.active_sessions,
+            app.popup_events.0,
+            app.popup_events.1,
+            popup_status
+        )
+    } else {
+        // Show the most recent system message with token count
+        let msg = app.system_buffer.back().cloned().unwrap_or_default();
+        format!(
+            "{} | Tokens: {} | Events: show={}/close={}{}",
+            msg, app.stats.tokens_used, app.popup_events.0, app.popup_events.1, popup_status
+        )
     };
 
     let system_status = Paragraph::new(system_text)
