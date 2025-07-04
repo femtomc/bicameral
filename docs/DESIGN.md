@@ -219,32 +219,32 @@ class WorkflowAction:
 @gen.gen_fn
 def workflow_model(goal, initial_state, horizon):
     """Generative model of any interactive workflow."""
-    
+
     # User preferences
     preferences = gen.sample("preferences", preference_prior())
-    
+
     # Task dynamics (how complexity evolves)
     complexity_growth = gen.sample("complexity", gen.gamma(2.0, 0.5))
-    
+
     trajectory = []
     state = initial_state
-    
+
     for t in range(horizon):
         # Action selection based on domain
-        action = gen.sample(f"action_{t}", 
+        action = gen.sample(f"action_{t}",
             policy(state, goal, preferences))
-        
+
         # State transition
-        next_state = gen.sample(f"state_{t+1}", 
+        next_state = gen.sample(f"state_{t+1}",
             transition_kernel(state, action))
-        
+
         # User feedback
         feedback = gen.sample(f"feedback_{t}",
             feedback_model(next_state, preferences))
-        
+
         trajectory.append((action, next_state, feedback))
         state = next_state
-    
+
     return trajectory
 ```
 

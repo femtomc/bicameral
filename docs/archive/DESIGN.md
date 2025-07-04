@@ -204,17 +204,17 @@ class PatternDetector:
         self.sequence_analyzer = SequenceAnalyzer()
         self.workflow_detector = WorkflowDetector()
         self.style_analyzer = StyleAnalyzer()
-        
+
     def analyze_interaction_stream(self, interactions):
         # Detect repeated sequences
         sequences = self.sequence_analyzer.find_patterns(interactions)
-        
+
         # Identify workflows
         workflows = self.workflow_detector.extract_workflows(sequences)
-        
+
         # Analyze coding style
         style_patterns = self.style_analyzer.analyze(interactions)
-        
+
         return PatternSet(sequences, workflows, style_patterns)
 ```
 
@@ -229,14 +229,14 @@ class FeedbackProcessor:
             return self.process_preference(message, context)
         elif feedback_type == "pattern":
             return self.process_pattern(message, context)
-    
+
     def process_correction(self, message, context):
         # Identify what was wrong
         error_pattern = self.extract_error_pattern(context)
-        
+
         # Create negative example
         self.memory.add_negative_example(error_pattern)
-        
+
         # Extract correct approach
         correct_pattern = self.extract_correct_pattern(message)
         self.memory.add_positive_example(correct_pattern)
@@ -249,13 +249,13 @@ class ContextBuilder:
     def build_relevant_context(self, task_description):
         # Get semantic matches
         semantic_matches = self.semantic_search(task_description)
-        
+
         # Get recent related work
         recent_relevant = self.get_recent_relevant(task_description)
-        
+
         # Get applicable patterns
         patterns = self.get_applicable_patterns(task_description)
-        
+
         # Build context object
         return Context(
             files=semantic_matches.files,
@@ -408,11 +408,11 @@ Claude: ✓ Preference recorded. I'll use 30-minute JWT expiry going forward.
 ```
 You: /memory show patterns
 
-Memory Server: 
+Memory Server:
 📊 Learned Patterns:
 • API Endpoint Creation (confidence: 0.92)
   - Create route → Add controller → Add service → Write tests
-  
+
 • Test-Driven Bugfix (confidence: 0.87)
   - Read failing test → Understand issue → Fix implementation → Verify
 

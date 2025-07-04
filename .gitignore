@@ -12,11 +12,17 @@ dist/
 build/
 *.egg
 
+# Rust
+/target/
+Cargo.lock
+
 # Bicamrl System
-.bicamrl/
+.bicamrl/*
+!.bicamrl/Mind.toml
 test_memory/
 bicamrl_config.json
 .claude
+:memory:/
 
 # Testing
 scripts
@@ -33,9 +39,8 @@ debug_*/
 production_test_*
 
 # Type checking
-.mypy_cache/
-.dmypy.json
-dmypy.json
+.pyright/
+node_modules/
 
 # IDE
 .vscode/
@@ -58,6 +63,7 @@ pixi.lock
 
 # Logs
 *.log
+logs/
 
 # Documentation
 docs/_build/
@@ -67,6 +73,8 @@ site/
 *.tmp
 *.bak
 .cache/
+test*.txt
+test_*.py
 
 # Research papers
 /papers/
@@ -75,3 +83,13 @@ site/
 /*.md
 !CLAUDE.md
 !README.md
+
+# External repositories
+/claude-code-sdk-python/
+/gemini-cli/
+
+# One-off scripts
+architecture_diagram.py
+
+# Examples directory (development examples)
+/examples/

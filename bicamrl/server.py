@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """Bicamrl MCP Server - Following MCP Best Practices."""
 
-import asyncio
 import json
-import logging
 import os
 import time
 from collections.abc import AsyncIterator
@@ -13,35 +11,36 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from mcp.server.fastmcp import FastMCP
-from mcp.types import EmbeddedResource, ImageContent, Resource, TextContent, Tool
+from mcp.types import Resource
 
+from .config_loader import get_memory_path, get_vector_backend
+from .config_loader import load_config as load_json_config
 from .core.feedback_processor import FeedbackProcessor
 from .core.interaction_logger import InteractionLogger
-from .core.interaction_model import Action, FeedbackType, Interaction
+from .core.interaction_model import FeedbackType
 from .core.interaction_pattern_detector import InteractionPatternDetector
+from .core.llm_service import LLMService
 from .core.memory import Memory
 from .core.pattern_detector import PatternDetector
-from .core.llm_service import LLMService
+from .health import health_checker
+from .rate_limiter import RateLimiter
 from .sleep.config_validator import SleepConfigValidator
 from .sleep.llm_providers import create_llm_providers
 from .sleep.prompt_optimizer import PromptOptimizer
 from .sleep.sleep import Observation, Sleep
-from .storage.hybrid_store import HybridStore
-from .storage.sqlite_store import SQLiteStore
-from .config_loader import load_config as load_json_config, get_vector_backend, get_memory_path
+from .utils.log_utils import async_log_context
+from .utils.log_utils import create_interaction_logger as create_log_context
 from .utils.logging_config import get_logger, setup_logging, setup_production_logging
-from .utils.log_utils import async_log_context, create_interaction_logger as create_log_context
-from .utils.mcp_logging import mcp_tool_logger, mcp_resource_logger, with_interaction_logging, log_tool_metric
-from .health import health_checker
-from .rate_limiter import RateLimiter, RateLimitMiddleware, create_default_rate_limiter
-from .utils.rate_limit_decorator import rate_limited, apply_rate_limiter_to_tools
+from .utils.mcp_logging import (
+    log_tool_metric,
+    mcp_resource_logger,
+    mcp_tool_logger,
+    with_interaction_logging,
+)
+from .utils.rate_limit_decorator import apply_rate_limiter_to_tools, rate_limited
 
-# Configure logging based on environment
-if os.environ.get("BICAMRL_ENV") == "production":
-    setup_production_logging()
-else:
-    setup_logging(level=os.environ.get("LOG_LEVEL", "INFO"))
-    
+# Don't configure logging at module import time!
+# This will be done in initialize_server() instead
 logger = get_logger("server")
 
 # Global instances (initialized on server start)
@@ -58,9 +57,15 @@ config: Dict[str, Any] = {}
 
 async def initialize_server():
     """Initialize server components."""
+    # Configure logging based on environment
+    if os.environ.get("BICAMRL_ENV") == "production":
+        setup_production_logging()
+    else:
+        setup_logging(level=os.environ.get("LOG_LEVEL", "INFO"))
+
     start_time = time.time()
     logger.info("Starting Bicamrl server initialization")
-    
+
     global \
         memory, \
         pattern_detector, \
@@ -78,9 +83,9 @@ async def initialize_server():
         logger.info(
             "Configuration loaded",
             extra={
-                'has_sleep': config.get('sleep_layer', {}).get('enabled', False),
-                'config_source': 'Mind.toml' if config else 'defaults'
-            }
+                "has_sleep": config.get("sleep_layer", {}).get("enabled", False),
+                "config_source": "Mind.toml" if config else "defaults",
+            },
         )
 
     # Get database path and vector backend from config
@@ -95,74 +100,79 @@ async def initialize_server():
             try:
                 # Validate Sleep configuration first
                 sleep_layer_config = SleepConfigValidator.validate(config.get("sleep_layer", {}))
-                
+
                 # Create LLM providers from config
                 llm_providers = create_llm_providers(sleep_layer_config)
                 logger.debug(
                     f"Created {len(llm_providers)} LLM providers",
-                    extra={'providers': list(llm_providers.keys())}
+                    extra={"providers": list(llm_providers.keys())},
                 )
-                
+
                 # Get embeddings from the first provider that supports them
                 for provider_name, provider in llm_providers.items():
-                    if hasattr(provider, 'get_embeddings'):
+                    if hasattr(provider, "get_embeddings"):
                         llm_embeddings = provider.get_embeddings()
                         logger.info(
-                            f"Embeddings initialized",
-                            extra={'provider': provider_name, 'type': type(provider).__name__}
+                            "Embeddings initialized",
+                            extra={"provider": provider_name, "type": type(provider).__name__},
                         )
                         break
             except Exception as e:
                 logger.warning(
-                    f"Could not initialize LLM embeddings",
-                    extra={'error_type': type(e).__name__, 'error': str(e)}
+                    "Could not initialize LLM embeddings",
+                    extra={"error_type": type(e).__name__, "error": str(e)},
                 )
-    
+
     # Initialize LLM service for all components
     llm_config = {
         "default_provider": config.get("default_llm_provider", "openai"),
         "llm_providers": config.get("llm_providers", {}),
-        "rate_limit": config.get("llm_rate_limit", 60)
+        "rate_limit": config.get("llm_rate_limit", 60),
     }
     llm_service = LLMService(llm_config)
-    
+
     # Initialize core components with LLM service
     async with async_log_context(logger, "initialize_core_components"):
-        memory = Memory(db_path, llm_service=llm_service, llm_embeddings=llm_embeddings, vector_backend=vector_backend)
+        memory = Memory(
+            db_path,
+            llm_service=llm_service,
+            llm_embeddings=llm_embeddings,
+            vector_backend=vector_backend,
+        )
         # pattern_detector is now part of memory
         feedback_processor = FeedbackProcessor(memory)
         interaction_logger = InteractionLogger(memory)
         interaction_pattern_detector = InteractionPatternDetector(memory)
-        
+
         logger.info(
             "Core components initialized",
             extra={
-                'has_llm_service': True,
-                'has_embeddings': llm_embeddings is not None,
-                'session_id': memory.session_id,
-                'default_llm_provider': llm_config['default_provider']
-            }
+                "has_llm_service": True,
+                "has_embeddings": llm_embeddings is not None,
+                "session_id": memory.session_id,
+                "default_llm_provider": llm_config["default_provider"],
+            },
         )
-    
+
     # Initialize rate limiter
     async with async_log_context(logger, "initialize_rate_limiter"):
         rate_limiter_config = config.get("rate_limiting", {})
         rate_limiter = RateLimiter(
             requests_per_minute=rate_limiter_config.get("requests_per_minute", 60),
             burst_size=rate_limiter_config.get("burst_size", 10),
-            window_seconds=rate_limiter_config.get("window_seconds", 60)
+            window_seconds=rate_limiter_config.get("window_seconds", 60),
         )
         logger.info(
             "Rate limiter initialized",
             extra={
-                'requests_per_minute': rate_limiter.requests_per_minute,
-                'burst_size': rate_limiter.burst_size,
-                'window_seconds': rate_limiter.window_seconds
-            }
+                "requests_per_minute": rate_limiter.requests_per_minute,
+                "burst_size": rate_limiter.burst_size,
+                "window_seconds": rate_limiter.window_seconds,
+            },
         )
 
     # Initialize Sleep if configured
-    if config.get("sleep_layer", {}).get("enabled", False) and 'sleep_layer_config' in locals():
+    if config.get("sleep_layer", {}).get("enabled", False) and "sleep_layer_config" in locals():
         try:
             # Validate Sleep configuration
             sleep_layer_config = SleepConfigValidator.validate(config.get("sleep_layer", {}))
@@ -175,7 +185,7 @@ async def initialize_server():
 
             # Initialize prompt optimizer
             prompt_optimizer = PromptOptimizer(memory)
-            
+
             # Set LLM provider on memory for semantic consolidation
             # Use the first available provider
             for provider_name, provider in llm_providers.items():
@@ -199,47 +209,104 @@ async def initialize_server():
     logger.info(
         "Bicamrl server initialization complete",
         extra={
-            'duration_ms': init_duration_ms,
-            'components': {
-                'memory': memory is not None,
-                'pattern_detector': pattern_detector is not None,
-                'feedback_processor': feedback_processor is not None,
-                'sleep_layer': sleep_layer is not None,
-                'embeddings': llm_embeddings is not None
-            }
-        }
+            "duration_ms": init_duration_ms,
+            "components": {
+                "memory": memory is not None,
+                "pattern_detector": pattern_detector is not None,
+                "feedback_processor": feedback_processor is not None,
+                "sleep_layer": sleep_layer is not None,
+                "embeddings": llm_embeddings is not None,
+            },
+        },
     )
 
 
 async def cleanup_server():
     """Cleanup server components."""
     logger.info("Starting server cleanup")
-    
+
     if sleep_layer:
         async with async_log_context(logger, "stop_sleep_layer"):
             await sleep_layer.stop()
             logger.info("Sleep layer stopped")
-    
-    if memory and hasattr(memory, 'consolidate_memories'):
+
+    if memory and hasattr(memory, "consolidate_memories"):
         try:
             logger.info("Running final memory consolidation")
             stats = await memory.consolidate_memories()
-            logger.info(
-                "Final consolidation complete",
-                extra={'consolidation_stats': stats}
-            )
+            logger.info("Final consolidation complete", extra={"consolidation_stats": stats})
         except Exception as e:
             logger.error(
                 "Error during final consolidation",
-                extra={'error_type': type(e).__name__},
-                exc_info=True
+                extra={"error_type": type(e).__name__},
+                exc_info=True,
             )
-    
+
     logger.info("Server cleanup complete")
+
+
+def create_default_mind_toml():
+    """Create default Mind.toml with Claude Code configuration."""
+    default_config = """# Bicamrl Configuration - Auto-generated
+# This configuration uses Claude Code for all Sleep agents
+
+[sleep]
+enabled = true
+batch_size = 10
+analysis_interval = 300  # seconds between deep analysis
+min_confidence = 0.7
+discovery_interval = 86400  # seconds between role discovery (24 hours)
+
+# Claude Code configuration (no API key needed!)
+[sleep.llm_providers.claude_code]
+type = "claude_code"
+enabled = true
+temperature = 0.7
+
+# Use Claude Code for all Sleep agents
+[sleep.roles]
+analyzer = "claude_code"      # Analyzes patterns and behaviors
+generator = "claude_code"     # Generates insights and recommendations
+enhancer = "claude_code"      # Enhances prompts
+optimizer = "claude_code"     # Optimizes performance
+
+[logging]
+level = "INFO"
+file = "~/.bicamrl/logs/bicamrl.log"
+
+[memory]
+consolidation_interval = 3600  # seconds (1 hour)
+max_active_memories = 1000
+
+[roles]
+auto_discover = true
+min_interactions_per_role = 10
+max_active_roles = 10
+"""
+
+    # Create .bicamrl directory if it doesn't exist
+    bicamrl_dir = Path.home() / ".bicamrl"
+    bicamrl_dir.mkdir(exist_ok=True)
+
+    # Create logs directory
+    logs_dir = bicamrl_dir / "logs"
+    logs_dir.mkdir(exist_ok=True)
+
+    # Write Mind.toml
+    mind_toml_path = bicamrl_dir / "Mind.toml"
+    if not mind_toml_path.exists():
+        mind_toml_path.write_text(default_config)
+        logger.info(f"Created default Mind.toml at {mind_toml_path}")
+        logger.info("Default configuration uses Claude Code for all Sleep agents")
+        return True
+    return False
 
 
 def load_config() -> Dict[str, Any]:
     """Load configuration from Mind.toml and JSON config files."""
+    # Create default Mind.toml if none exists
+    create_default_mind_toml()
+
     # Start with JSON config (includes vector store settings)
     config = load_json_config()
 
@@ -309,6 +376,24 @@ def load_config() -> Dict[str, Any]:
             "ANTHROPIC_API_KEY"
         ]
 
+    # If sleep is enabled but no providers configured, default to claude_code
+    if config.get("sleep_layer", {}).get("enabled", False):
+        if not config.get("sleep_layer", {}).get("llm_providers"):
+            logger.info("No LLM providers configured, defaulting to Claude Code")
+            config.setdefault("sleep_layer", {}).setdefault("llm_providers", {})
+            config["sleep_layer"]["llm_providers"]["claude_code"] = {
+                "type": "claude_code",
+                "enabled": True,
+                "temperature": 0.7,
+            }
+            # Also set default roles to use claude_code
+            config["sleep_layer"]["roles"] = {
+                "analyzer": "claude_code",
+                "generator": "claude_code",
+                "enhancer": "claude_code",
+                "optimizer": "claude_code",
+            }
+
     # Expand environment variables in config
     config = expand_env_vars(config)
 
@@ -332,13 +417,14 @@ def expand_env_vars(obj: Any) -> Any:
 @asynccontextmanager
 async def server_lifespan(server: FastMCP) -> AsyncIterator[None]:
     """Manage server lifecycle."""
+    # Initialize server (including logging setup)
     await initialize_server()
-    
+
     # Apply rate limiter to all tools
     if rate_limiter:
         apply_rate_limiter_to_tools(server, rate_limiter)
         logger.info("Rate limiting applied to MCP tools")
-    
+
     try:
         yield
     finally:
@@ -353,6 +439,7 @@ mcp = FastMCP(
 
 # Resources
 
+
 # Health Check Resources
 @mcp.resource("health://status")
 @mcp_resource_logger("health_status")
@@ -362,9 +449,9 @@ async def health_status() -> Resource:
         memory=memory,
         sleep_layer=sleep_layer,
         pattern_detector=pattern_detector,
-        feedback_processor=feedback_processor
+        feedback_processor=feedback_processor,
     )
-    
+
     return Resource(
         uri="health://status",
         name="Health Status",
@@ -379,7 +466,7 @@ async def health_status() -> Resource:
 async def health_ready() -> Resource:
     """Check if server is ready to handle requests."""
     is_ready = memory is not None and pattern_detector is not None
-    
+
     ready_data = {
         "ready": is_ready,
         "timestamp": datetime.now().isoformat(),
@@ -388,9 +475,9 @@ async def health_ready() -> Resource:
             "pattern_detector": pattern_detector is not None,
             "feedback_processor": feedback_processor is not None,
             "interaction_logger": interaction_logger is not None,
-        }
+        },
     }
-    
+
     return Resource(
         uri="health://ready",
         name="Readiness Check",
@@ -409,12 +496,15 @@ async def health_live() -> Resource:
         name="Liveness Check",
         description="Simple liveness probe",
         mimeType="application/json",
-        text=json.dumps({
-            "alive": True,
-            "timestamp": datetime.now().isoformat(),
-            "server": "bicamrl",
-            "version": "1.0.0"
-        }, indent=2),
+        text=json.dumps(
+            {
+                "alive": True,
+                "timestamp": datetime.now().isoformat(),
+                "server": "bicamrl",
+                "version": "1.0.0",
+            },
+            indent=2,
+        ),
     )
 
 
@@ -430,12 +520,12 @@ async def rate_limit_status() -> Resource:
             mimeType="application/json",
             text=json.dumps({"error": "Rate limiting not configured"}, indent=2),
         )
-    
+
     metrics = rate_limiter.get_metrics()
-    
+
     return Resource(
         uri="health://rate-limits",
-        name="Rate Limit Status", 
+        name="Rate Limit Status",
         description="Current rate limiting metrics and configuration",
         mimeType="application/json",
         text=json.dumps(metrics, indent=2, default=str),
@@ -561,9 +651,9 @@ async def get_world_model_resource() -> Resource:
             name="World Model",
             description="Sleep layer not enabled",
             mimeType="application/json",
-            text=json.dumps({"error": "Sleep layer not enabled"})
+            text=json.dumps({"error": "Sleep layer not enabled"}),
         )
-    
+
     try:
         world_understanding = await sleep_layer.get_current_world_understanding()
         return Resource(
@@ -571,7 +661,7 @@ async def get_world_model_resource() -> Resource:
             name="World Model",
             description="Current world model understanding",
             mimeType="application/json",
-            text=json.dumps(world_understanding, indent=2)
+            text=json.dumps(world_understanding, indent=2),
         )
     except Exception as e:
         return Resource(
@@ -579,7 +669,7 @@ async def get_world_model_resource() -> Resource:
             name="World Model",
             description="Error getting world model",
             mimeType="application/json",
-            text=json.dumps({"error": str(e)})
+            text=json.dumps({"error": str(e)}),
         )
 
 
@@ -750,7 +840,7 @@ async def start_interaction(
     """
     # Start the interaction
     interaction_id = interaction_logger.start_interaction(user_query, context)
-    
+
     # Create a logger context for this interaction
     interaction_log = create_log_context(interaction_id, memory.session_id)
     interaction_log.log_query(user_query)
@@ -759,13 +849,13 @@ async def start_interaction(
     similar_queries = []
     if memory.hybrid_store:
         similar_queries = await memory.search_similar_queries(user_query, k=3)
-        
+
         if similar_queries:
             log_tool_metric(
                 "similar_queries_found",
                 len(similar_queries),
                 "start_interaction",
-                interaction_id=interaction_id
+                interaction_id=interaction_id,
             )
 
     suggestions = {
@@ -817,24 +907,24 @@ async def log_ai_interpretation(
         confidence=confidence,
         role=active_role,
     )
-    
+
     # Log the interpretation details
     interaction_log = create_log_context(interaction_id, memory.session_id)
     interaction_log.info(
         f"AI interpretation: {interpretation[:100]}...",
         interpretation=interpretation,
-        planned_actions=planned_actions
+        planned_actions=planned_actions,
     )
-    
+
     # Log metrics
     log_tool_metric(
         "interpretation_confidence",
         confidence,
         "log_ai_interpretation",
         interaction_id=interaction_id,
-        actions_count=len(planned_actions)
+        actions_count=len(planned_actions),
     )
-    
+
     return "AI interpretation logged."
 
 
@@ -856,19 +946,19 @@ async def log_action(
     """
     if not interaction_logger.current_interaction:
         return "Error: No active interaction. Call start_interaction first."
-    
+
     interaction_id = interaction_logger.current_interaction.interaction_id
     interaction_log = create_log_context(interaction_id, memory.session_id)
-    
+
     action = interaction_logger.log_action(action_type, target, details)
-    
+
     # Log the action details
     interaction_log.log_action(action_type, target or "none", details or {})
-    
+
     # Mark action as completed immediately for now
     # In future, could track async execution
     interaction_logger.complete_action(action, result="Success")
-    
+
     return f"Action '{action_type}' logged."
 
 
@@ -890,7 +980,7 @@ async def complete_interaction(
     """
     if not interaction_logger.current_interaction:
         return {"error": "No active interaction to complete."}
-    
+
     interaction_id = interaction_logger.current_interaction.interaction_id
     interaction_log = create_log_context(interaction_id, memory.session_id)
 
@@ -904,7 +994,7 @@ async def complete_interaction(
             feedback_type = FeedbackType.APPROVAL
         elif any(word in feedback_lower for word in ["also", "and", "then", "next"]):
             feedback_type = FeedbackType.FOLLOWUP
-    
+
     # Complete the interaction
     completed = interaction_logger.complete_interaction(
         feedback=feedback, feedback_type=feedback_type, success=success
@@ -912,26 +1002,23 @@ async def complete_interaction(
 
     if not completed:
         return {"error": "Failed to complete interaction."}
-    
+
     # Log feedback if provided
     if feedback:
-        interaction_log.log_feedback(
-            feedback_type.value if feedback_type else "general",
-            feedback
-        )
+        interaction_log.log_feedback(feedback_type.value if feedback_type else "general", feedback)
 
     # Store the completed interaction (will use hybrid store if available)
     await memory.store_interaction(completed)
 
     # Detect patterns from this interaction
     patterns = await interaction_pattern_detector.detect_patterns([completed])
-    
+
     if patterns:
         log_tool_metric(
             "patterns_detected",
             len(patterns),
             "complete_interaction",
-            interaction_id=interaction_id
+            interaction_id=interaction_id,
         )
 
     # If Sleep is enabled, observe the completed interaction
@@ -948,7 +1035,7 @@ async def complete_interaction(
             metadata=completed.to_dict(),
         )
         await sleep_layer.observe(observation)
-    
+
     return {
         "interaction_id": completed.interaction_id,
         "success": completed.success,
@@ -973,16 +1060,16 @@ async def detect_pattern(action_sequence: List[str]) -> Dict[str, Any]:
         Matching patterns with confidence scores
     """
     matches = await pattern_detector.find_matching_patterns(action_sequence)
-    
+
     # Log metrics for top matches
     if matches:
         log_tool_metric(
             "pattern_matches_found",
             len(matches),
             "detect_pattern",
-            top_confidence=matches[0].get('confidence', 0) if matches else 0
+            top_confidence=matches[0].get("confidence", 0) if matches else 0,
         )
-    
+
     return {"matches": matches}
 
 
@@ -1036,18 +1123,19 @@ async def get_relevant_context(
         suggested_actions = [
             action
             for action, count in sorted(common_actions.items(), key=lambda x: x[1], reverse=True)
-            if count >= len(successful_similar) * 0.5  # Action appears in 50%+ of successful interactions
+            if count
+            >= len(successful_similar) * 0.5  # Action appears in 50%+ of successful interactions
         ]
         context["suggested_actions"] = suggested_actions
-        
+
         # Log metrics
         log_tool_metric(
             "suggested_actions_found",
             len(suggested_actions),
             "get_relevant_context",
-            successful_similar_count=len(successful_similar)
+            successful_similar_count=len(successful_similar),
         )
-    
+
     return context
 
 
@@ -1074,8 +1162,8 @@ async def record_feedback(
 
     # If there's a current interaction, complete it with this feedback
     if interaction_logger.current_interaction:
-        current_interaction_id = interaction_logger.current_interaction.interaction_id
-        
+        # Current interaction ID is available via interaction_logger.current_interaction.interaction_id
+
         # Map old feedback types to new FeedbackType enum
         feedback_type_map = {
             "correct": FeedbackType.CORRECTION,
@@ -1106,7 +1194,7 @@ async def record_feedback(
             metadata={"feedback_type": feedback_type, "interaction_id": interaction_id},
         )
         await sleep_layer.observe(observation)
-    
+
     return f"Feedback recorded: {result}"
 
 
@@ -1392,9 +1480,11 @@ async def discover_roles() -> Dict[str, Any]:
             "new_roles_discovered": new_role_count,
             "total_custom_roles": len(all_roles),
             "roles": role_info,
-            "discovery_method": "interaction-based"
-            if sleep_layer.role_manager.use_interaction_discovery
-            else "action-based",
+            "discovery_method": (
+                "interaction-based"
+                if sleep_layer.role_manager.use_interaction_discovery
+                else "action-based"
+            ),
         }
 
     except Exception as e:
@@ -1409,49 +1499,51 @@ async def discover_roles() -> Dict[str, Any]:
 async def get_world_model_proposals(limit: int = 5) -> Dict[str, Any]:
     """
     Get goal-directed proposals based on world model understanding.
-    
+
     Args:
         limit: Maximum number of proposals to return
-        
+
     Returns:
         Dict containing proposals and current world understanding
     """
     if not sleep_layer:
         return {"error": "Sleep layer not enabled"}
-    
+
     try:
         # Get recent interactions
         recent_interactions = await memory.store.get_recent_complete_interactions(
             hours=24, limit=50
         )
-        
+
         # Get world model proposals
         proposals = await sleep_layer.get_world_model_proposals(recent_interactions)
-        
+
         # Get current world understanding
         world_understanding = await sleep_layer.get_current_world_understanding()
-        
+
         # Format proposals
         proposal_list = []
         for i, proposal in enumerate(proposals[:limit]):
-            proposal_list.append({
-                "id": f"proposal_{i}",
-                "type": proposal.type.value,
-                "description": proposal.description,
-                "rationale": proposal.rationale,
-                "confidence": proposal.confidence,
-                "suggested_actions": proposal.suggested_actions,
-                "expected_state_change": proposal.expected_state_change,
-                "alternatives": proposal.alternatives
-            })
-        
+            proposal_list.append(
+                {
+                    "id": f"proposal_{i}",
+                    "type": proposal.type.value,
+                    "description": proposal.description,
+                    "rationale": proposal.rationale,
+                    "confidence": proposal.confidence,
+                    "suggested_actions": proposal.suggested_actions,
+                    "expected_state_change": proposal.expected_state_change,
+                    "alternatives": proposal.alternatives,
+                }
+            )
+
         return {
             "proposals": proposal_list,
             "world_understanding": world_understanding,
             "proposal_count": len(proposals),
-            "recent_interactions_analyzed": len(recent_interactions)
+            "recent_interactions_analyzed": len(recent_interactions),
         }
-        
+
     except Exception as e:
         logger.error(f"Failed to get world model proposals: {e}")
         return {"error": str(e)}
@@ -1459,29 +1551,23 @@ async def get_world_model_proposals(limit: int = 5) -> Dict[str, Any]:
 
 @mcp.tool()
 @mcp_tool_logger("provide_proposal_feedback")
-async def provide_proposal_feedback(
-    proposal_id: str,
-    feedback: str,
-    success: bool
-) -> str:
+async def provide_proposal_feedback(proposal_id: str, feedback: str, success: bool) -> str:
     """
     Provide feedback on a world model proposal.
-    
+
     Args:
         proposal_id: ID of the proposal
         feedback: Feedback text
         success: Whether the proposal was helpful
-        
+
     Returns:
         Confirmation message
     """
     if not sleep_layer:
         return "Error: Sleep layer not enabled"
-    
+
     try:
-        await sleep_layer.update_world_model_from_feedback(
-            proposal_id, feedback, success
-        )
+        await sleep_layer.update_world_model_from_feedback(proposal_id, feedback, success)
         return f"Feedback recorded for {proposal_id}"
     except Exception as e:
         return f"Error recording feedback: {str(e)}"

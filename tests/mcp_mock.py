@@ -49,25 +49,25 @@ class PromptMessage:
 class Server:
     def __init__(self, name: str):
         self.name = name
-        
+
     def set_list_resources_handler(self, handler):
         pass
-        
+
     def set_read_resource_handler(self, handler):
         pass
-        
+
     def set_list_tools_handler(self, handler):
         pass
-        
+
     def set_call_tool_handler(self, handler):
         pass
-        
+
     def set_list_prompts_handler(self, handler):
         pass
-        
+
     def set_run_prompt_handler(self, handler):
         pass
-        
+
     async def run(self, rx, tx):
         pass
 
@@ -76,15 +76,15 @@ async def stdio_server():
     class MockStdioServer:
         async def __aenter__(self):
             return (None, None)
-            
+
         async def __aexit__(self, *args):
             pass
-            
+
     return MockStdioServer()
 
 
 # Additional mock types for FastMCP
-@dataclass  
+@dataclass
 class ImageContent:
     data: bytes
     mimeType: str
@@ -97,7 +97,7 @@ class EmbeddedResource:
 
 class FastMCP:
     """Mock FastMCP server for testing."""
-    
+
     def __init__(self, name: str, version: str, description: str):
         self.name = name
         self.version = version
@@ -106,7 +106,7 @@ class FastMCP:
         self._resource_handlers: Dict[str, Callable] = {}
         self._on_server_start: Optional[Callable] = None
         self._on_server_stop: Optional[Callable] = None
-    
+
     def tool(self, name: Optional[str] = None):
         """Decorator for registering tools."""
         def decorator(func: Callable) -> Callable:
@@ -114,28 +114,28 @@ class FastMCP:
             self._tool_handlers[tool_name] = func
             return func
         return decorator
-    
+
     def resource(self, uri: str):
         """Decorator for registering resources."""
         def decorator(func: Callable) -> Callable:
             self._resource_handlers[uri] = func
             return func
         return decorator
-    
+
     def on_server_start(self):
         """Decorator for server start hook."""
         def decorator(func: Callable) -> Callable:
             self._on_server_start = func
             return func
         return decorator
-    
+
     def on_server_stop(self):
         """Decorator for server stop hook."""
         def decorator(func: Callable) -> Callable:
             self._on_server_stop = func
             return func
         return decorator
-    
+
     async def run(self):
         """Mock run method."""
         if self._on_server_start:

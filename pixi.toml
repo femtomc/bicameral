@@ -7,82 +7,36 @@ channels = ["conda-forge", "pytorch"]
 platforms = ["osx-arm64", "linux-64", "osx-64"]
 
 [tasks]
-# Setup and installation
-install = "pip install -e ."
-install-dev = "pip install -e '.[dev]'"
-install-all = { depends-on = ["install", "install-dev"] }
+# Primary interface - TUI
+bicamrl = { cmd = "python -m bicamrl.tui", depends-on = ["build"] }
+tui = { depends-on = ["bicamrl"] }
 
-# Testing
-test = "pytest tests/ -v"
-test-cov = "pytest tests/ --cov=bicamrl --cov-report=html --cov-report=term"
-test-watch = "pytest-watch tests/ -- -v"
-test-specific = "pytest -v -k"
-test-integration = "pytest tests/test_mcp_integration.py tests/test_mcp_protocol.py -v"
-test-mcp = "pytest tests/test_mcp_*.py -v"
-
-# Code quality
-format = "black bicamrl tests"
-format-check = "black --check bicamrl tests"
-lint = "ruff check bicamrl tests"
-lint-fix = "ruff check --fix bicamrl tests"
-typecheck = "mypy bicamrl"
-typecheck-strict = "mypy --strict bicamrl"
-
-# Combined quality checks
-check = { depends-on = ["format", "lint", "typecheck", "test"] }
-check-ci = { depends-on = ["format-check", "lint", "typecheck", "test-cov"] }
-
-# Server and CLI
+# Core functionality
 server = "python -m bicamrl"
-server-dev = "python -m bicamrl --dev-mode"
 init = "python -m bicamrl.cli init"
-
-# Memory management shortcuts
-feedback = "python -m bicamrl.cli feedback"
-memory = "python -m bicamrl.cli memory"
-export = "python -m bicamrl.cli export"
 import = "python -m bicamrl.cli import"
+export = "python -m bicamrl.cli export"
 
-# Development helpers
-clean = "rm -rf .pytest_cache .coverage htmlcov .mypy_cache build dist *.egg-info"
-clean-all = "rm -rf .pytest_cache .coverage htmlcov .mypy_cache build dist *.egg-info .pixi pixi.lock"
-pre-commit-install = "pre-commit install"
-pre-commit-run = "pre-commit run --all-files"
+# Development
+build = "maturin develop --release"
+build-dev = "maturin develop"
+format = "ruff format bicamrl && cargo fmt"
+format-check = "ruff format --check bicamrl && cargo fmt -- --check"
+lint = "ruff check bicamrl && cargo clippy -- -W warnings"
+type-check = "pyright bicamrl && cargo check"
+test = "python -m pytest tests/ -v && cargo test"
+test-cov = "python -m pytest tests/ --cov=bicamrl --cov-report=term-missing --cov-report=html"
+check = { depends-on = ["format", "lint", "type-check", "test"] }
 
-# Documentation
-docs-serve = "mkdocs serve"
-docs-build = "mkdocs build"
+# Rust-specific commands
+cargo-check = "cargo check --all-targets"
+cargo-clippy = "cargo clippy --all-targets -- -W warnings"
+cargo-test = "cargo test --all"
+cargo-fmt-check = "cargo fmt -- --check"
 
-# Demo and examples
-demo = "PYTHONPATH=. python examples/mcp_client_demo.py"
-demo-integration = "python -m bicamrl --test && python examples/mcp_client_demo.py"
-
-# Production testing
-test-production = "python scripts/run_production_test.py"
-test-production-quick = "python scripts/run_production_test.py --quick"
-test-monitor = "python scripts/monitor_production_test.py"
-
-# LM Studio testing - requires model name as argument
-# Usage: pixi run test-lmstudio TheBloke/Mistral-7B-Instruct-v0.2-GGUF
-test-lmstudio = "python scripts/run_lmstudio_test.py"
-test-lmstudio-full = "python scripts/run_lmstudio_test.py --full"
-test-sleep-layer = "python scripts/test_sleep_layer.py"
-
-# Utility tasks
-show-tree = "find . -type f -name '*.py' -o -name '*.md' -o -name '*.toml' -o -name '*.json' | grep -v -E '__pycache__|.git|.pixi|.pytest_cache|.coverage|htmlcov|.mypy_cache|*.egg-info' | sort"
-show-stats = "find bicamrl -name '*.py' | xargs wc -l"
-task-list = "echo 'Available pixi tasks:' && grep -E '^[a-z-]+ =' pixi.toml | sed 's/ =.*//' | sort | column"
-
-# Database management
-db-init = "python -m bicamrl.cli init --force"
-db-reset = "rm -rf .bicamrl/memory && python -m bicamrl.cli init"
-db-status = "python -m bicamrl.cli status"
-
-# Quick aliases
-f = { depends-on = ["feedback"] }
-m = { depends-on = ["memory"] }
-s = { depends-on = ["server"] }
-t = { depends-on = ["test"] }
+# Utilities
+clean = "rm -rf .pytest_cache .coverage htmlcov .pyright build dist *.egg-info target"
+install = "pip install -e ."
 
 [dependencies]
 python = ">=3.9,<3.13"
@@ -92,9 +46,14 @@ click = ">=8.0.0"
 pydantic = ">=2.0.0"
 aiohttp = ">=3.9.0"
 numpy = ">=1.24.0"
+rust = ">=1.70.0"
+maturin = ">=1.0.0"
 
 [pypi-dependencies]
 mcp = { git = "https://github.com/modelcontextprotocol/python-sdk.git" }
+textual = ">=0.47.0"
+toml = ">=0.10.2"
+claude-code-sdk = ">=0.0.1"
 
 [feature.test.dependencies]
 pytest = ">=7.0.0"
@@ -103,9 +62,8 @@ pytest-cov = ">=4.0.0"
 pytest-mock = ">=3.10.0"
 
 [feature.dev.dependencies]
-black = ">=23.0.0"
 ruff = ">=0.1.0"
-mypy = ">=1.0.0"
+pyright = ">=1.1.0"
 ipython = ">=8.0.0"
 pre-commit = ">=3.0.0"
 # pytest-watch = ">=4.2.0"  # Not available in conda-forge

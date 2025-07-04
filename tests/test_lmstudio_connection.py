@@ -15,9 +15,9 @@ async def test_lmstudio_connection():
         "model": os.getenv("LMSTUDIO_MODEL", "local-model"),
         "max_tokens": 100
     }
-    
+
     provider = OpenAILLMProvider(api_key="not-needed", config=config)
-    
+
     # Test simple generation
     response = await provider.generate("Hello, this is a test. Please respond with 'OK'.")
     assert response is not None
@@ -35,9 +35,9 @@ async def test_lmstudio_analysis():
         "model": os.getenv("LMSTUDIO_MODEL", "local-model"),
         "max_tokens": 500
     }
-    
+
     provider = OpenAILLMProvider(api_key="not-needed", config=config)
-    
+
     # Test analysis (generate instead of analyze to avoid JSON requirement)
     prompt = """Analyze this user interaction:
 User: "Help me fix the login bug"
@@ -45,7 +45,7 @@ Actions: read auth.py, edit auth.py, run tests
 Success: True
 
 What domain is this? Return a single word."""
-    
+
     response = await provider.generate(prompt)
     assert response is not None
     print(f"Analysis response: {response}")

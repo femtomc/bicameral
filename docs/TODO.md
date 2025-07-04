@@ -345,8 +345,8 @@ This will enable:
 ### Code Quality
 1. Type hints for all functions
 2. Docstrings following Google style
-3. Black formatting
-4. Mypy type checking
+3. Ruff formatting
+4. Pyright type checking
 5. No emojis in code/docs
 
 ### Git Workflow

@@ -386,7 +386,7 @@ class TestSleepResources:
         """Test Sleep insights resource."""
         # Enable Sleep for this test
         import bicamrl.server as server_module
-        
+
         # Mock Sleep being enabled
         if hasattr(server_module, 'sleep_layer'):
             server_module.sleep_layer = MagicMock()
@@ -399,7 +399,7 @@ class TestSleepResources:
                     "timestamp": datetime.now().isoformat()
                 }
             ]
-        
+
         # Try to read insights (may not work without full Sleep setup)
         try:
             insights = await mcp_client.read_resource("memory://sleep/insights")
@@ -574,7 +574,7 @@ class TestMCPTools:
 
         # Call consolidate_memories
         result = await mcp_client.call_tool("consolidate_memories", {})
-        
+
         assert isinstance(result, str)
         assert "consolidat" in result.lower() or "memory" in result.lower()
 
@@ -596,7 +596,7 @@ class TestMCPTools:
             "get_memory_insights",
             {"task_description": "Fix authentication errors"}
         )
-        
+
         assert isinstance(result, dict)
         assert "insights" in result or "recommendations" in result or isinstance(result, dict)
 
@@ -620,7 +620,7 @@ class TestMCPTools:
 
         # Discover roles
         result = await mcp_client.call_tool("discover_roles", {"max_roles": 3})
-        
+
         assert isinstance(result, list) or isinstance(result, str)
 
     @pytest.mark.asyncio
@@ -633,7 +633,7 @@ class TestMCPTools:
         }
 
         result = await mcp_client.call_tool("get_role_recommendations", {"context": context})
-        
+
         assert isinstance(result, list) or isinstance(result, str)
 
     @pytest.mark.asyncio
@@ -641,7 +641,7 @@ class TestMCPTools:
         """Test applying a role."""
         # Try to apply a role
         result = await mcp_client.call_tool("apply_role", {"role_name": "general_assistant"})
-        
+
         assert isinstance(result, str)
         # Either success message or error if role not found
 
@@ -649,7 +649,7 @@ class TestMCPTools:
     async def test_get_role_statistics_tool(self, mcp_client):
         """Test role statistics tool."""
         result = await mcp_client.call_tool("get_role_statistics", {})
-        
+
         assert isinstance(result, dict)
         assert "total_roles" in result or isinstance(result, dict)
 
@@ -663,7 +663,7 @@ class TestMCPTools:
         }
 
         result = await mcp_client.call_tool("get_sleep_recommendation", {"context": context})
-        
+
         assert isinstance(result, dict) or isinstance(result, str)
 
 

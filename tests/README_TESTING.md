@@ -4,7 +4,7 @@
 
 1. **Install LM Studio**: Download from [lmstudio.ai](https://lmstudio.ai/)
 
-2. **Download a Model**: 
+2. **Download a Model**:
    - Open LM Studio
    - Go to the "Search" tab
    - Download a model like:

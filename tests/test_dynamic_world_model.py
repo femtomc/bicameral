@@ -7,12 +7,12 @@ from datetime import datetime
 from unittest.mock import Mock, AsyncMock, patch
 
 from bicamrl.core.memory import Memory
-from bicamrl.core.dynamic_world_model import (
-    DynamicWorldModelInferencer, DynamicWorldState, 
-    DynamicEntity, DynamicRelation
+from bicamrl.core.world_model import (
+    WorldModelInferencer, WorldState,
+    Entity, Relation
 )
 from bicamrl.core.llm_service import LLMService, LLMResponse
-from bicamrl.core.dynamic_memory_consolidator import DynamicMemoryConsolidator
+from bicamrl.core.memory_consolidator import MemoryConsolidator
 
 
 @pytest.fixture
@@ -26,12 +26,12 @@ async def memory(tmp_path):
 def mock_llm_service():
     """Create a mock LLM service for testing."""
     service = Mock(spec=LLMService)
-    
+
     # Mock world model inference
     async def mock_infer_world_model(interaction):
         # Simulate different domains based on query content
         query = interaction.get('user_query', '').lower()
-        
+
         if 'recipe' in query or 'cook' in query:
             domain = 'cooking'
             entities = [
@@ -78,7 +78,7 @@ def mock_llm_service():
             goals = [
                 {"type": "assistance", "description": query[:50], "confidence": 0.6}
             ]
-            
+
         return LLMResponse(
             content={
                 "domain": domain,
@@ -92,7 +92,7 @@ def mock_llm_service():
             duration_ms=100,
             provider="mock"
         )
-    
+
     service.infer_world_model = AsyncMock(side_effect=mock_infer_world_model)
     return service
 
@@ -100,13 +100,13 @@ def mock_llm_service():
 @pytest.fixture
 def world_inferencer(mock_llm_service):
     """Create a world model inferencer with mock LLM."""
-    return DynamicWorldModelInferencer(mock_llm_service)
+    return WorldModelInferencer(mock_llm_service)
 
 
 @pytest.mark.asyncio
 async def test_dynamic_domain_discovery(world_inferencer):
     """Test that the system can discover any domain dynamically."""
-    
+
     # Test 1: Cooking domain (never hardcoded!)
     cooking_interaction = {
         "interaction_id": "cook_1",
@@ -117,14 +117,14 @@ async def test_dynamic_domain_discovery(world_inferencer):
         ],
         "success": True
     }
-    
+
     world_state = await world_inferencer.infer_from_interaction(cooking_interaction)
-    
+
     assert world_state.domain == "cooking"
     assert "recipe" in world_state.discovered_entity_types
     assert "equipment" in world_state.discovered_entity_types
     assert "requires" in world_state.discovered_relation_types
-    
+
     # Test 2: Quantum physics domain
     physics_interaction = {
         "interaction_id": "phys_1",
@@ -135,14 +135,14 @@ async def test_dynamic_domain_discovery(world_inferencer):
         ],
         "success": True
     }
-    
+
     world_state = await world_inferencer.infer_from_interaction(physics_interaction)
-    
+
     # Should update to new domain
     assert world_state.domain == "quantum_physics"
     assert "quantum_system" in world_state.discovered_entity_types
     assert "operator" in world_state.discovered_entity_types
-    
+
     # Test 3: Music composition domain
     music_interaction = {
         "interaction_id": "music_1",
@@ -153,9 +153,9 @@ async def test_dynamic_domain_discovery(world_inferencer):
         ],
         "success": True
     }
-    
+
     world_state = await world_inferencer.infer_from_interaction(music_interaction)
-    
+
     assert world_state.domain == "music_composition"
     assert "musical_element" in world_state.discovered_entity_types
     assert "supports" in world_state.discovered_relation_types
@@ -164,7 +164,7 @@ async def test_dynamic_domain_discovery(world_inferencer):
 @pytest.mark.asyncio
 async def test_dynamic_entity_type_discovery(world_inferencer):
     """Test that entity types are discovered dynamically, not from enums."""
-    
+
     # Simulate an interaction in a completely novel domain
     interaction = {
         "interaction_id": "novel_1",
@@ -176,7 +176,7 @@ async def test_dynamic_entity_type_discovery(world_inferencer):
         ],
         "success": True
     }
-    
+
     # Mock a creative LLM response
     world_inferencer.llm_service.infer_world_model.return_value = LLMResponse(
         content={
@@ -202,16 +202,16 @@ async def test_dynamic_entity_type_discovery(world_inferencer):
         duration_ms=150,
         provider="mock"
     )
-    
+
     world_state = await world_inferencer.infer_from_interaction(interaction)
-    
+
     # Check that completely novel entity types were discovered
     assert world_state.domain == "permaculture_design"
     assert "design_document" in world_state.discovered_entity_types
     assert "sustainable_infrastructure" in world_state.discovered_entity_types
     assert "water_management_system" in world_state.discovered_entity_types
     assert "living_system" in world_state.discovered_entity_types
-    
+
     # Check novel relation types
     assert "enriches" in world_state.discovered_relation_types
     assert "integrated_into" in world_state.discovered_relation_types
@@ -221,9 +221,9 @@ async def test_dynamic_entity_type_discovery(world_inferencer):
 @pytest.mark.asyncio
 async def test_llm_based_memory_consolidation(memory, mock_llm_service):
     """Test that memory consolidation uses LLM for pattern discovery."""
-    
-    consolidator = DynamicMemoryConsolidator(memory, mock_llm_service)
-    
+
+    consolidator = MemoryConsolidator(memory, mock_llm_service)
+
     # Add diverse interactions
     interactions = [
         {
@@ -239,10 +239,10 @@ async def test_llm_based_memory_consolidation(memory, mock_llm_service):
         }
         for i in range(15)
     ]
-    
+
     for interaction in interactions:
         await memory.store.add_complete_interaction(**interaction)
-    
+
     # Mock LLM responses for consolidation
     mock_llm_service._execute_request = AsyncMock(
         return_value=LLMResponse(
@@ -261,13 +261,13 @@ async def test_llm_based_memory_consolidation(memory, mock_llm_service):
             provider="mock"
         )
     )
-    
+
     # Run consolidation
     stats = await consolidator.consolidate_memories()
-    
+
     # Should have created world model
     assert stats["world_models_updated"] > 0
-    
+
     # Check that patterns were created
     patterns = await memory.store.get_patterns()
     assert len(patterns) > 0
@@ -276,7 +276,7 @@ async def test_llm_based_memory_consolidation(memory, mock_llm_service):
 @pytest.mark.asyncio
 async def test_insights_generation(world_inferencer):
     """Test that the system generates insights about discovered patterns."""
-    
+
     # Add multiple interactions to build up a world model
     interactions = [
         {
@@ -287,14 +287,14 @@ async def test_insights_generation(world_inferencer):
         }
         for i, item in enumerate(["tomatoes", "basil", "peppers", "compost", "trellis"])
     ]
-    
+
     # Process interactions
     for interaction in interactions:
         await world_inferencer.infer_from_interaction(interaction)
-    
+
     # Get insights
     insights = world_inferencer.get_insights()
-    
+
     assert insights["total_entities"] > 0
     assert insights["total_relations"] >= 0
     assert len(insights["discovered_entity_types"]) > 0
@@ -306,7 +306,7 @@ async def test_insights_generation(world_inferencer):
 @pytest.mark.asyncio
 async def test_fallback_for_llm_failure(world_inferencer):
     """Test that system gracefully handles LLM failures."""
-    
+
     # Mock LLM failure
     world_inferencer.llm_service.infer_world_model.return_value = LLMResponse(
         content=None,
@@ -315,7 +315,7 @@ async def test_fallback_for_llm_failure(world_inferencer):
         duration_ms=0,
         error="LLM service unavailable"
     )
-    
+
     interaction = {
         "interaction_id": "fallback_1",
         "user_query": "Create a new document",
@@ -324,10 +324,10 @@ async def test_fallback_for_llm_failure(world_inferencer):
         ],
         "success": True
     }
-    
+
     # Should still work with basic inference
     world_state = await world_inferencer.infer_from_interaction(interaction)
-    
+
     assert len(world_state.entities) > 0
     assert "document.txt" in world_state.entities
     assert len(world_state.inferred_goals) > 0

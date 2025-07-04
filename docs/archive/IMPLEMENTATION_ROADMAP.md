@@ -26,17 +26,17 @@ from datetime import datetime
 def log_interaction(event_type, tool_name, params):
     conn = sqlite3.connect('.ai/memory/interactions.db')
     c = conn.cursor()
-    
+
     # Create table if not exists
     c.execute('''CREATE TABLE IF NOT EXISTS interactions
-                 (timestamp TEXT, event_type TEXT, tool_name TEXT, 
+                 (timestamp TEXT, event_type TEXT, tool_name TEXT,
                   params TEXT, session_id TEXT)''')
-    
+
     # Log the interaction
     c.execute("INSERT INTO interactions VALUES (?, ?, ?, ?, ?)",
-              (datetime.now().isoformat(), event_type, tool_name, 
+              (datetime.now().isoformat(), event_type, tool_name,
                json.dumps(params), get_session_id()))
-    
+
     conn.commit()
     conn.close()
 
@@ -55,21 +55,21 @@ from collections import defaultdict
 class SimplePatternDetector:
     def __init__(self):
         self.conn = sqlite3.connect('.ai/memory/interactions.db')
-        
+
     def detect_common_sequences(self, window_size=5):
         # Get recent interactions
         c = self.conn.cursor()
-        c.execute("""SELECT tool_name, params FROM interactions 
+        c.execute("""SELECT tool_name, params FROM interactions
                      ORDER BY timestamp DESC LIMIT 100""")
-        
+
         interactions = c.fetchall()
-        
+
         # Find repeated sequences
         sequences = defaultdict(int)
         for i in range(len(interactions) - window_size):
             sequence = tuple(interactions[i:i+window_size])
             sequences[sequence] += 1
-        
+
         # Save patterns that appear more than twice
         patterns = []
         for seq, count in sequences.items():
@@ -79,7 +79,7 @@ class SimplePatternDetector:
                     'frequency': count,
                     'confidence': count / len(interactions)
                 })
-        
+
         return patterns
 ```
 
@@ -97,26 +97,26 @@ from datetime import datetime
 @click.argument('message')
 def feedback(feedback_type, message):
     """Record developer feedback for AI learning."""
-    
+
     conn = sqlite3.connect('.ai/memory/interactions.db')
     c = conn.cursor()
-    
+
     # Create feedback table
     c.execute('''CREATE TABLE IF NOT EXISTS feedback
                  (timestamp TEXT, type TEXT, message TEXT, context TEXT)''')
-    
+
     # Get recent context
     c.execute("SELECT * FROM interactions ORDER BY timestamp DESC LIMIT 5")
     recent_context = c.fetchall()
-    
+
     # Store feedback
     c.execute("INSERT INTO feedback VALUES (?, ?, ?, ?)",
-              (datetime.now().isoformat(), feedback_type, message, 
+              (datetime.now().isoformat(), feedback_type, message,
                json.dumps(recent_context)))
-    
+
     conn.commit()
     conn.close()
-    
+
     click.echo(f"✓ Feedback recorded: {feedback_type} - {message}")
 
 if __name__ == '__main__':

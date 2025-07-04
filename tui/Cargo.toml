@@ -1,0 +1,23 @@
+[package]
+name = "bicamrl_tui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[lib]
+name = "bicamrl_tui"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+unicode-width.workspace = true
+
+[profile.release]
+lto = "thin"

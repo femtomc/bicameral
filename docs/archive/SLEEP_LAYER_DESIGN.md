@@ -71,7 +71,7 @@ class KnowledgeBaseMaintainer:
         self.analysis_queue = asyncio.Queue()
         self.reflection_interval = 300  # 5 minutes
         self.batch_size = 10  # Process 10 interactions at a time
-        
+
     async def observe_interaction(self, interaction):
         """Passively observe wake layer interactions."""
         await self.analysis_queue.put({
@@ -83,17 +83,17 @@ class KnowledgeBaseMaintainer:
             'tokens_used': interaction.tokens,
             'latency': interaction.latency
         })
-        
+
         # Trigger immediate analysis for critical events
         if self._is_critical(interaction):
             await self.immediate_analysis(interaction)
-    
+
     async def reflection_loop(self):
         """Periodic reflection on accumulated observations."""
         while True:
             await asyncio.sleep(self.reflection_interval)
             batch = await self._get_interaction_batch()
-            
+
             if batch:
                 insights = await self.analyze_batch(batch)
                 await self.apply_insights(insights)
@@ -111,12 +111,12 @@ class RealTimeMonitor:
             'error_patterns': ErrorTracker(),
             'success_patterns': SuccessTracker()
         }
-    
+
     async def process_interaction(self, interaction):
         # Lightweight, immediate processing
         for metric in self.metrics.values():
             metric.update(interaction)
-        
+
         # Flag interesting patterns
         if self._detect_anomaly(interaction):
             await self.flag_for_deep_analysis(interaction)
@@ -129,16 +129,16 @@ class BatchAnalyzer:
         # Use LLM to identify patterns
         analysis_prompt = f"""
         Analyze these {len(interactions)} interactions:
-        
+
         1. Identify recurring patterns
         2. Find knowledge gaps
         3. Suggest optimizations
         4. Rate context effectiveness
-        
+
         Interactions:
         {self._format_interactions(interactions)}
         """
-        
+
         insights = await self.llm.analyze(analysis_prompt)
         return self._parse_insights(insights)
 ```
@@ -149,13 +149,13 @@ class KnowledgeOptimizer:
     async def optimize_knowledge_base(self, insights):
         # Restructure based on usage patterns
         await self._reorganize_by_relevance(insights.usage_stats)
-        
+
         # Compress redundant information
         await self._merge_similar_patterns(insights.patterns)
-        
+
         # Generate new composite patterns
         await self._synthesize_meta_patterns(insights.workflows)
-        
+
         # Create optimized prompt templates
         await self._generate_prompt_templates(insights.successful_interactions)
 ```
@@ -167,17 +167,17 @@ class PromptRecommender:
     def __init__(self, knowledge_base, pattern_store):
         self.kb = knowledge_base
         self.patterns = pattern_store
-        
+
     async def recommend_prompt_enhancement(self, current_context, task):
         # Analyze task requirements
         task_analysis = await self._analyze_task(task)
-        
+
         # Find relevant patterns
         relevant_patterns = await self.patterns.search(
             task_type=task_analysis.type,
             similarity_threshold=0.8
         )
-        
+
         # Construct optimized prompt
         enhanced_prompt = PromptBuilder()
             .with_task(task)
@@ -186,7 +186,7 @@ class PromptRecommender:
             .with_constraints(self._infer_constraints(task_analysis))
             .with_output_format(self._suggest_format(task_analysis))
             .build()
-        
+
         return {
             'original': task,
             'enhanced': enhanced_prompt,
@@ -205,13 +205,13 @@ class TransparentSleep Layer:
     async def intercept_request(self, user_request):
         # Enhance request before it reaches wake layer
         enhanced = await self.prompt_recommender.enhance(user_request)
-        
+
         # Let wake layer process
         response = await self.main_instance.process(enhanced)
-        
+
         # Learn from the interaction
         await self.observe_interaction(user_request, enhanced, response)
-        
+
         return response
 ```
 
@@ -237,14 +237,14 @@ class PeriodicReviewSleep Layer:
     async def nightly_review(self):
         # Comprehensive analysis of the day's interactions
         daily_summary = await self._summarize_day()
-        
+
         # Deep pattern mining
         new_patterns = await self._mine_patterns(daily_summary)
-        
+
         # Knowledge base maintenance
         await self._cleanup_obsolete_knowledge()
         await self._consolidate_similar_patterns()
-        
+
         # Generate daily report
         return await self._generate_insights_report()
 ```
@@ -262,7 +262,7 @@ class Sleep LayerEventBus:
             'knowledge.updated': [],
             'recommendation.generated': []
         }
-    
+
     async def emit(self, event_type, data):
         for handler in self.events.get(event_type, []):
             await handler(data)
@@ -278,7 +278,7 @@ class Sleep LayerMessageQueue:
             'insights': 'sleep:insights',
             'recommendations': 'sleep:recommendations'
         }
-    
+
     async def publish_observation(self, observation):
         await self.redis.publish(
             self.channels['observations'],
@@ -299,7 +299,7 @@ class Sleep LayerMessageQueue:
 class FeedbackLoop:
     async def measure_recommendation_effectiveness(self, recommendation, outcome):
         effectiveness = await self._calculate_effectiveness(recommendation, outcome)
-        
+
         if effectiveness < self.threshold:
             await self.learn_from_failure(recommendation, outcome)
         else:
@@ -316,13 +316,13 @@ class MultiLLMCoordinator:
             'synthesizer': LlamaLLM(),
             'reviewer': MistralLLM()
         }
-    
+
     async def distributed_analysis(self, data):
         # Different LLMs for different tasks
         patterns = await self.llms['analyzer'].find_patterns(data)
         synthesis = await self.llms['synthesizer'].create_composite(patterns)
         review = await self.llms['reviewer'].validate(synthesis)
-        
+
         return self._consensus(patterns, synthesis, review)
 ```
 

@@ -37,7 +37,7 @@ Bicamrl provides:
 # Development
 pixi run server          # Start MCP server
 pixi run test            # Run test suite (ALWAYS run before commits)
-pixi run check           # Format, lint, and type check
+pixi run check           # Format, lint, type check, and test
 pixi run test-cov        # Coverage report
 
 # Testing Modes
@@ -45,10 +45,24 @@ pixi run test-production         # Production tests
 pixi run test-lmstudio "model"   # Test with LM Studio
 pixi run test-mcp                # MCP-specific tests
 
+# Code Quality
+pixi run format          # Auto-format code with Ruff and Cargo
+pixi run format-check    # Check formatting without modifying files
+pixi run lint            # Run linter with Ruff and Clippy
+pixi run type-check      # Type check with Pyright and Cargo
+
 # Utilities
 pixi run demo            # Interactive demo
-pixi run format          # Auto-format code
-pixi run lint            # Run linter
+
+# Rust-specific
+pixi run cargo-check     # Check Rust code compilation
+pixi run cargo-clippy    # Run Rust linter (clippy)
+pixi run cargo-test      # Run Rust tests
+pixi run cargo-fmt-check # Check Rust formatting
+
+# Pre-commit setup
+pre-commit install       # Install git hooks (run once)
+pre-commit run --all     # Run pre-commit on all files
 ```
 
 ## CRITICAL DIRECTIVES
@@ -60,12 +74,14 @@ pixi run lint            # Run linter
 4. **REMOVE OLD CODE**: We do NOT care about backwards compatibility. Remove legacy code freely.
 5. **TEST BEFORE COMMITTING**: Run `pixi run test` before any commits.
 6. **USE COUNT-BASED CONSOLIDATION**: Memory consolidation is based on interaction counts, NOT time.
+7. **TESTS GO IN TESTS/**: NEVER create test files in examples/ or scripts/. All tests MUST go in the tests/ directory. Examples are for user-facing demos only.
+8. **NO TEST SCRIPTS**: NEVER create standalone test scripts like test_*.py in the root directory. ALL tests go in tests/ directory as proper pytest tests.
 
 ## Terminology & Naming Conventions
 
 **YOU MUST** use these exact terms:
 - "Sleep" (NOT "SleepLayer")
-- "Wake" (NOT "WakeLayer")  
+- "Wake" (NOT "WakeLayer")
 - "Memory" (NOT "MemoryManager")
 - "consolidation" (NOT "promotion" or "migration")
 - These represent the two-tier architecture
@@ -82,9 +98,9 @@ pixi run lint            # Run linter
 
 ## Code Style
 
-- **Formatting**: Black (run `pixi run format`)
+- **Formatting**: Ruff (run `pixi run format`)
 - **Linting**: Ruff (run `pixi run lint`)
-- **Type Checking**: Mypy (run `pixi run check`)
+- **Type Checking**: Pyright (run `pixi run type-check`)
 - **Imports**: Use relative imports within modules
 - **Docstrings**: Required for all public functions
 - **Tests**: Required for all new features
@@ -209,7 +225,7 @@ self.min_frequency_for_semantic = 5     # Pattern frequency for semantic
 ```bash
 pixi run test              # Must pass before ANY commit
 pixi run test-cov          # Check coverage for new code
-pixi run check             # Format and lint
+pixi run check             # Format, lint, type check, and test
 ```
 
 ### LLM Testing Modes

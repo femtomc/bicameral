@@ -32,16 +32,16 @@ async def test_store_complete_interaction(memory):
         session_id="test_session",
         user_query="Fix the bug in authentication"
     )
-    
+
     # Add some actions
     interaction.actions_taken = [
         Action(action_type="read_file", target="auth.py", status=ActionStatus.COMPLETED),
         Action(action_type="edit_file", target="auth.py", status=ActionStatus.COMPLETED)
     ]
-    
+
     # Store it
     await memory.store.add_complete_interaction(interaction.to_dict())
-    
+
     # Also store as old-style interaction for get_recent_context
     await memory.store.add_interaction({
         'action': 'edit_file',
@@ -49,12 +49,12 @@ async def test_store_complete_interaction(memory):
         'timestamp': datetime.now().isoformat(),
         'session_id': memory.session_id
     })
-    
+
     # Get recent context to verify it was stored
     context = await memory.get_recent_context()
     assert context['total_interactions'] >= 1
 
-@pytest.mark.asyncio 
+@pytest.mark.asyncio
 async def test_get_recent_context(memory):
     """Test getting recent context - current implementation."""
     # Add some old-style interactions for compatibility
@@ -66,10 +66,10 @@ async def test_get_recent_context(memory):
             'timestamp': datetime.now().isoformat(),
             'session_id': memory.session_id
         })
-    
+
     # Get context
     context = await memory.get_recent_context()
-    
+
     assert 'recent_actions' in context
     assert 'total_interactions' in context
     assert context['total_interactions'] >= 3
@@ -84,7 +84,7 @@ async def test_preferences(memory):
         'category': 'coding',
         'source': 'test'
     })
-    
+
     # Get preferences returns a dict of categories
     prefs = await memory.get_preferences()
     assert isinstance(prefs, dict)
@@ -102,7 +102,7 @@ async def test_search(memory):
         'timestamp': datetime.now().isoformat(),
         'session_id': memory.session_id
     })
-    
+
     # Search
     results = await memory.search("authentication")
     # Results might be empty if search only looks at patterns
@@ -119,9 +119,9 @@ async def test_stats(memory):
             'timestamp': datetime.now().isoformat(),
             'session_id': memory.session_id
         })
-    
+
     stats = await memory.get_stats()
-    
+
     assert 'total_interactions' in stats
     assert stats['total_interactions'] >= 3
 
@@ -135,10 +135,10 @@ async def test_clear_specific(memory):
         'sequence': ['a', 'b'],
         'confidence': 0.8
     })
-    
+
     # Clear patterns
     await memory.clear_specific('patterns')
-    
+
     # Should be empty
     patterns = await memory.get_all_patterns()
     assert len(patterns) == 0
@@ -151,10 +151,10 @@ async def test_hybrid_functionality_integrated(memory):
     assert hasattr(memory, 'find_correction_patterns')
     assert hasattr(memory, 'find_successful_patterns')
     assert hasattr(memory, 'cluster_similar_queries')
-    
+
     # But hybrid_store is None without embeddings
     assert memory.hybrid_store is None
-    
+
     # These methods should gracefully handle missing hybrid store
     results = await memory.search_similar_queries("test query")
     assert isinstance(results, list)  # Falls back to regular search

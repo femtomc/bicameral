@@ -62,7 +62,7 @@ def mock_llm_config() -> Dict[str, Any]:
 @pytest.fixture
 async def llm_service(request):
     """Create LLM service based on test requirements.
-    
+
     By default uses LM Studio if available, falls back to mock.
     Tests can request specific config with:
     - @pytest.mark.lmstudio - force LM Studio
@@ -93,7 +93,7 @@ async def llm_service(request):
             config = request.getfixturevalue('mock_llm_config')
     else:
         config = request.getfixturevalue('mock_llm_config')
-    
+
     # Only test LM Studio connection if explicitly requested
     if force_lmstudio and config["default_provider"] == "lmstudio":
         try:
@@ -112,7 +112,7 @@ async def llm_service(request):
             pytest.skip("LM Studio connection timed out - is the server running?")
         except Exception as e:
             pytest.skip(f"LM Studio not available: {type(e).__name__}: {e}")
-            
+
     return LLMService(config)
 
 
@@ -168,11 +168,11 @@ async def sample_interactions(memory):
             "feedback_type": "CORRECTION"
         }
     ]
-    
+
     # Store using the new complete interaction format
     for interaction in interactions:
         await memory.store.add_complete_interaction(interaction)
-    
+
     return interactions
 
 
@@ -191,7 +191,7 @@ async def sample_patterns(memory):
         {
             "name": "Debug Pattern",
             "description": "Common debugging workflow",
-            "pattern_type": "action_sequence", 
+            "pattern_type": "action_sequence",
             "sequence": ["read_file", "edit_file", "run_tests"],
             "confidence": 0.75,
             "frequency": 8
@@ -205,10 +205,10 @@ async def sample_patterns(memory):
             "frequency": 15
         }
     ]
-    
+
     for pattern in patterns:
         await memory.store.add_pattern(pattern)
-    
+
     return patterns
 
 
@@ -221,7 +221,7 @@ async def sample_preferences(memory):
         ("async_io", "always use async/await", "style"),
         ("naming", "snake_case for functions", "style"),
     ]
-    
+
     for key, value, category in preferences:
         await memory.store.add_preference({
             "key": key,
@@ -231,7 +231,7 @@ async def sample_preferences(memory):
             "source": "test",
             "timestamp": "2024-01-01"
         })
-    
+
     return preferences
 
 

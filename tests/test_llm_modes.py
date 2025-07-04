@@ -14,9 +14,9 @@ async def test_with_mock_llm():
         "llm_providers": {},
         "rate_limit": 1000
     }
-    
+
     llm_service = LLMService(config)
-    
+
     # Test world model inference
     interaction = {
         "user_query": "Help me fix the authentication bug",
@@ -27,9 +27,9 @@ async def test_with_mock_llm():
         ],
         "success": True
     }
-    
+
     response = await llm_service.infer_world_model(interaction)
-    
+
     assert response.content is not None
     assert response.content['domain'] == 'software_development'
     print(f"Mock response domain: {response.content['domain']}")
@@ -52,9 +52,9 @@ async def test_with_lmstudio():
         },
         "rate_limit": 120
     }
-    
+
     llm_service = LLMService(config)
-    
+
     # Test world model inference
     interaction = {
         "user_query": "Help me create a chocolate cake recipe",
@@ -64,9 +64,9 @@ async def test_with_lmstudio():
         ],
         "success": True
     }
-    
+
     response = await llm_service.infer_world_model(interaction)
-    
+
     assert response.content is not None
     print(f"\nLM Studio response:")
     print(f"Domain: {response.content.get('domain', 'unknown')}")
@@ -86,7 +86,7 @@ async def test_default_behavior(llm_service):
         ],
         "success": True
     }
-    
+
     response = await llm_service.infer_world_model(interaction)
     assert response.content is not None
     print(f"\nDefault fixture response domain: {response.content.get('domain', 'unknown')}")
@@ -96,6 +96,6 @@ if __name__ == "__main__":
     # Run specific tests
     print("Running mock test...")
     pytest.main([__file__, "-k", "test_with_mock_llm", "-v", "-s"])
-    
+
     print("\nRunning LM Studio test (requires server)...")
     pytest.main([__file__, "-k", "test_with_lmstudio", "-v", "-s"])

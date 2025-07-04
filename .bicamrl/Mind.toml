@@ -1,0 +1,87 @@
+# Bicameral Mind Configuration
+
+# Default provider for Wake
+default_provider = "claude_code"
+
+# Main LLM provider for Wake agent
+[llm_providers.claude_code]
+type = "claude_code"
+enabled = true
+temperature = 0.7
+max_tokens = 2048
+# Permission configuration - use custom tool
+permission_mode = "tool"
+permission_prompt_tool = "approval_prompt"
+allowed_tools = []  # Empty list means all tools require permission
+# MCP server configuration for the permission tool
+[llm_providers.claude_code.mcp_servers.bicamrl-permissions]
+command = ["pixi", "run", "python", "-m", "bicamrl.tui.permission_server"]
+
+[sleep]
+enabled = true
+batch_size = 5
+analysis_interval = 120  # seconds
+min_confidence = 0.6
+discovery_interval = 300  # seconds
+
+# You can use either OpenAI or Claude (Anthropic) API keys
+# Uncomment and configure the provider you want to use
+
+[sleep.llm_providers.claude_code]
+type = "claude_code"
+enabled = true
+temperature = 0.7
+max_tokens = 1000
+# Permission configuration - use custom tool
+permission_mode = "tool"
+permission_prompt_tool = "approval_prompt"
+allowed_tools = []  # Empty list means all tools require permission
+# MCP server configuration for the permission tool
+[sleep.llm_providers.claude_code.mcp_servers.bicamrl-permissions]
+command = ["pixi", "run", "python", "-m", "bicamrl.tui.permission_server"]
+
+# Alternative: LM Studio configuration (commented out)
+# [sleep.llm_providers.lmstudio]
+# api_key = "not-needed"  # LM Studio doesn't require API key
+# base_url = "http://localhost:1234/v1"  # LM Studio default endpoint
+# model = "default"  # Will use whatever model is loaded in LM Studio
+# temperature = 0.7
+# max_tokens = 1000
+
+# [sleep.llm_providers.openai]
+# api_key = "${OPENAI_API_KEY}"  # Or set directly: "sk-..."
+# model = "gpt-4o-mini"
+# temperature = 0.7
+# max_tokens = 1000
+
+# [sleep.llm_providers.claude]
+# api_key = "${ANTHROPIC_API_KEY}"  # Or set directly: "sk-ant-..."
+# model = "claude-3-haiku-20240307"
+# temperature = 0.7
+# max_tokens = 1000
+
+# Map roles to LLM providers
+# For Claude Code everywhere
+[sleep.roles]
+analyzer = "claude_code"     # Will use Claude Code
+generator = "claude_code"    # Will use Claude Code
+enhancer = "claude_code"     # Will use Claude Code
+optimizer = "claude_code"    # Will use Claude Code
+
+[logging]
+level = "INFO"
+file = "logs/bicamrl.log"
+max_bytes = 10485760  # 10MB
+backup_count = 5
+
+[memory]
+consolidation_interval = 3600  # 1 hour
+max_active_memories = 1000
+max_working_memories = 5000
+episodic_retention_days = 30
+semantic_threshold = 0.8
+
+[interaction]
+auto_complete_timeout = 300  # seconds
+min_actions_for_pattern = 3
+pattern_confidence_threshold = 0.7

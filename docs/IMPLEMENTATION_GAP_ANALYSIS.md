@@ -63,7 +63,7 @@ This document analyzes what's needed to make the example interaction flow from R
 @server.tool()
 async def log_interaction(action: str, file_path: Optional[str] = None):
     # Only logs individual actions
-    
+
 # Needed
 @server.tool()
 async def start_interaction(user_query: str, context: Optional[Dict] = None):
@@ -91,19 +91,19 @@ The AI agent needs to automatically call these tools in sequence:
 ```python
 class MCPInteractionWrapper:
     """Wraps MCP communication to track full interactions."""
-    
+
     def __init__(self, mcp_client):
         self.mcp_client = mcp_client
         self.current_interaction_id = None
-    
+
     async def process_user_request(self, user_query: str):
         # 1. Start interaction
         result = await self.mcp_client.call_tool(
-            "start_interaction", 
+            "start_interaction",
             {"user_query": user_query}
         )
         self.current_interaction_id = result["interaction_id"]
-        
+
         # 2. AI processes and logs interpretation
         # 3. AI performs actions
         # 4. Complete interaction
@@ -114,7 +114,7 @@ class MCPInteractionWrapper:
 ```python
 class QueryActionLearner:
     """Learns mappings from user queries to action sequences."""
-    
+
     async def learn_from_interaction(self, interaction: Interaction):
         if interaction.success:
             # Store successful query → action mappings
@@ -123,7 +123,7 @@ class QueryActionLearner:
                 action_sequence=interaction.action_sequence,
                 confidence=interaction.confidence
             )
-    
+
     async def suggest_actions(self, user_query: str) -> List[str]:
         # Find similar past queries
         similar = await self.find_similar_queries(user_query)
@@ -140,7 +140,7 @@ async def get_query_suggestions(user_query: str):
     """Get suggestions based on similar past queries."""
     # Search for similar queries in vector store
     similar = await hybrid_store.search_similar_queries(user_query)
-    
+
     # Extract patterns
     suggestions = {
         "similar_queries": [s.user_query for s in similar],
@@ -148,7 +148,7 @@ async def get_query_suggestions(user_query: str):
         "relevant_files": extract_common_files(similar),
         "confidence": calculate_aggregate_confidence(similar)
     }
-    
+
     return suggestions
 ```
 

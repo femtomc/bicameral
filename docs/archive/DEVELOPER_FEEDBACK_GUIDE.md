@@ -54,10 +54,10 @@ export class UserService {
     // @ai-feedback: Always check cache first
     const cached = await this.cache.get(`user:${id}`);
     if (cached) return cached;
-    
+
     // @ai-preference: Use findOneOrFail for better error handling
     const user = await this.repo.findOneOrFail(id);
-    
+
     // @ai-pattern: Always transform to DTO before returning
     return UserDto.fromEntity(user);
   }
@@ -71,7 +71,7 @@ class AuthManager:
     async def login(self, credentials):
         # @ai-critical: NEVER log passwords
         self.logger.info(f"Login attempt for {credentials.username}")
-        
+
         # @ai-preference: Use constant-time comparison for passwords
         if not await self.verify_password(credentials):
             # @ai-pattern: Always rate-limit failed attempts
@@ -179,7 +179,7 @@ Start with the most important patterns and gradually add more nuanced preference
 # Week 1: Core patterns
 ai-feedback pattern "All API routes need authentication middleware"
 
-# Week 2: Style preferences  
+# Week 2: Style preferences
 ai-feedback prefer "Use object destructuring in function parameters"
 
 # Week 3: Advanced patterns

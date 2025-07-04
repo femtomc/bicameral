@@ -119,17 +119,17 @@ Records all tool usage with context:
 class InteractionLogger:
     def __init__(self):
         self.db = sqlite3.connect('.ai/memory/interactions.db')
-        
+
     def log(self, event_type, tool, params, context=None):
         timestamp = datetime.now()
         session_id = self.get_current_session()
-        
+
         # Extract relevant info based on tool type
         if tool == "Read":
             self.log_file_read(params['file_path'], context)
         elif tool == "Edit":
-            self.log_code_change(params['file_path'], 
-                               params['old_string'], 
+            self.log_code_change(params['file_path'],
+                               params['old_string'],
                                params['new_string'])
         # ... etc
 ```
@@ -141,16 +141,16 @@ Identifies recurring workflows:
 class PatternDetector:
     def __init__(self):
         self.patterns = self.load_patterns()
-        
+
     def detect_workflow(self, recent_actions):
         # Look for sequences like:
         # 1. Read test file → Read implementation → Edit implementation → Run tests
         # 2. Read error → Search for similar → Apply fix pattern
-        
+
         for pattern in self.patterns:
             if pattern.matches(recent_actions):
                 return pattern
-                
+
     def learn_new_pattern(self, actions, outcome):
         if outcome.was_successful:
             pattern = self.extract_pattern(actions)
@@ -278,7 +278,7 @@ class ClaudeMdGenerator:
         patterns = self.load_high_confidence_patterns()
         preferences = self.load_developer_preferences()
         recent_work = self.get_recent_context()
-        
+
         content = f"""# Project Assistant Knowledge
 
 ## Learned Patterns
@@ -293,7 +293,7 @@ class ClaudeMdGenerator:
 ## Common Issues and Solutions
 {self.format_known_issues()}
 """
-        
+
         with open('CLAUDE.md', 'w') as f:
             f.write(content)
 ```
